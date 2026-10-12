@@ -36,7 +36,6 @@ from rulesmith.runtime import (
     Models,
     Prices,
     calibrated,
-    sureness,
 )
 
 # Temperatures tried, evenly spaced in log from a fifth to five: calibration corrects a judge's
@@ -263,8 +262,10 @@ def observed(
                 and isinstance(node.question, (Noul, Score))
             ):
                 seen.setdefault(name, []).append(answers[name]["value"])
-            if isinstance(node, Confidence) and node.source in answers:
-                seen.setdefault(name, []).append(sureness(answers[node.source]))
+            # The confidence the judge reported, which is what a rule compares, not the
+            # probability of its answer: on two options, 0.68 reads 0.36.
+            if isinstance(node, Confidence) and "confidence" in answers.get(node.source, {}):
+                seen.setdefault(name, []).append(answers[node.source]["confidence"])
     return seen
 
 

@@ -11,6 +11,7 @@ from test_cli import invoke, write
 from test_graph import task_data
 
 from rulesmith.calibrate import cuts, fit_cutoffs, fit_temperature, measure
+from rulesmith.chat_judge import choice_confidence, score_confidence
 from rulesmith.graph import Plan, Task
 from rulesmith.optimize import Labels
 from rulesmith.rules import compile_rules, render_rules
@@ -288,6 +289,127 @@ def test_confidence_and_threshold_cutoffs_are_fitted_too(provider, client):
     assert [cut.node for cut in cuts(plan)] == ["settled"]
     fitted, report = fit_cutoffs(plan, task, client, "fixture")
     assert 0.58 < fitted.nodes["settled"].cutoff < 0.6 and report[0]["tests"] == "sure"
+
+
+@given(st.floats(0.2, 5))
+def test_a_temperature_reshapes_how_sure_a_choice_or_a_score_reads(temperature):
+    # A rule tests `.confidence`, so a fitted temperature has to reach it, by the formula the
+    # judge reported it with, or calibrating a choice could never change what a rule decides.
+    choice = calibrated(CHOICE, temperature)
+    score = calibrated(
+        {
+            "type": "score",
+            "value": 1.737,
+            "probabilities": {"0": 0.066, "1": 0.131, "2": 0.803},
+            "confidence": 0.6,
+        },
+        temperature,
+    )
+    if abs(temperature - 1) < 0.001:
+        return
+    assert choice["confidence"] == pytest.approx(
+        choice_confidence(list(choice["probabilities"].values()))
+    )
+    levels = sorted(score["probabilities"], key=int)
+    assert score["confidence"] == pytest.approx(
+        score_confidence([score["probabilities"][level] for level in levels])
+    )
+    # Above one an overconfident judge reads less sure; below one a timid one reads surer.
+    untempered = choice_confidence(list(CHOICE["probabilities"].values()))
+    assert (choice["confidence"] < untempered) == (temperature > 1)
+    # An answer its own probabilities argue against is not made sure by sharpening them.
+    assert calibrated(CHOICE | {"value": "c"}, temperature)["confidence"] == 0
+
+
+def test_a_fitted_temperature_reaches_the_confidence_a_rule_tests(provider, client):
+    provider.answers = {
+        "threat": {
+            "type": "choice",
+            "choice": "ATTACK",
+            "confidence": choice_confidence([0.9, 0.1]),
+            "probabilities": {"ATTACK": 0.9, "MOVE_BACKWARD": 0.1},
+        }
+    }
+    rules = (
+        'ask threat = "Fight or fall back?" [ATTACK: "Ammo and health allow it."]'
+        ' [MOVE_BACKWARD: "They do not."]{}\n'
+        'when threat.confidence >= 0.7 and threat == "ATTACK": ATTACK\n'
+        "always: MOVE_FORWARD"
+    )
+    sure = DecisionProgram(compile_rules(rules.format("")), client, "fixture")(state="contact")
+    hedged = DecisionProgram(compile_rules(rules.format(" calibrated 5")), client, "fixture")(
+        state="contact"
+    )
+    assert sure.label == "ATTACK" and sure.answers["threat"]["confidence"] == pytest.approx(0.8)
+    # Flattened by five, 0.9 against 0.1 is barely a lean, so the rule no longer acts on it.
+    assert hedged.answers["threat"]["confidence"] < 0.7
+    assert hedged.label == "MOVE_FORWARD"
+
+
+def confidence_threshold(cutoff: float) -> Plan:
+    """A plan accepting whatever its judge is at least `cutoff` sure of, from the confidence it
+    reports, and sending the rest to review."""
+    return Plan.model_validate(
+        {
+            "nodes": {
+                "route": {
+                    "type": "call",
+                    "inputs": {"text": {"type": "state"}},
+                    "question": {
+                        "type": "choice",
+                        "instructions": "Accept or review?",
+                        "criteria": {"accept": "Fine.", "review": "Check."},
+                    },
+                },
+                "sure": {"type": "confidence", "source": "route"},
+                "settled": {
+                    "type": "threshold",
+                    "source": "sure",
+                    "cutoff": cutoff,
+                    "above": "accept",
+                    "below": "review",
+                },
+            },
+            "outputs": {"label": {"type": "node", "node": "settled"}},
+        }
+    )
+
+
+def test_a_confidence_cutoff_is_fitted_on_the_confidence_the_rule_compares(provider, client):
+    # The judge reports confidence the way TypeSafe and the chat judge do, how far its leading
+    # option stands above even odds, not the leading option's probability, so on two options
+    # p = 0.68 reads 0.36 and p = 0.71 reads 0.42.
+    def answer(request):
+        p = stated(request)
+        provider.body["answers"] = {
+            "route": {
+                "type": "choice",
+                "choice": "accept",
+                "confidence": choice_confidence([p, 1 - p]),
+                "probabilities": {"accept": p, "review": 1 - p},
+            }
+        }
+
+    provider.on_request = answer
+    review = [0.55, 0.56, 0.57, 0.575, 0.58, 0.585, 0.59, 0.595, 0.6, 0.605]
+    review += [0.61, 0.615, 0.62, 0.625, 0.63, 0.64, 0.65, 0.66, 0.67, 0.68]
+    accept = [0.71, 0.72, 0.73, 0.74, 0.75, 0.76, 0.765, 0.77, 0.78, 0.8, 0.82]
+    accept += [0.84, 0.85, 0.86, 0.88, 0.9, 0.91, 0.92, 0.93, 0.94, 0.95]
+    data = task_data() | {
+        "train": [
+            *[{"id": f"a{i}", "state": str(p), "label": "accept"} for i, p in enumerate(accept)],
+            *[{"id": f"r{i}", "state": str(p), "label": "review"} for i, p in enumerate(review)],
+        ]
+    }
+    task = Task.model_validate(data)
+    fitted, report = fit_cutoffs(confidence_threshold(0.95), task, client, "fixture")
+    # Every reviewed request reads at most 0.36 and every accepted one at least 0.42, so the line
+    # belongs between them and gets all 41 right. Lines drawn between the leading probabilities
+    # instead start at 0.555, which sends the eight accepted requests reading 0.42 to 0.54 to
+    # review: 33 of 41.
+    assert 0.36 < fitted.nodes["settled"].cutoff < 0.42
+    assert report[0]["train_before"] == pytest.approx(20 / 41)
+    assert report[0]["train_after"] == 1
 
 
 def test_the_cli_writes_fitted_cutoffs_and_reports_the_validation_change(tmp_path, provider):

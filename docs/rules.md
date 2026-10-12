@@ -114,7 +114,8 @@ small model that says 0.97 and is right three times in five is overconfident.
 `rulesmith calibrate task.json plan.rules --output calibrated.rules` fits one
 temperature per choice question over the task's labels, from its answers on the
 training examples, and writes it into the question (`... [ATTACK: "..."]
-calibrated 1.8`). The answers stay the same; how sure they read changes.
+calibrated 1.8`). The answers stay the same; how sure they read changes,
+`threat.confidence` included.
 
 The line a rule draws on a judgment, the 0.7 in `threat.confidence >= 0.7`, is
 a number the proposer wrote, and search only moves it by rewriting the rule and

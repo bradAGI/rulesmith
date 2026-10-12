@@ -23,6 +23,7 @@ from typesafe_sdk import (
     Usage,
 )
 
+from rulesmith.chat_judge import score_confidence
 from rulesmith.graph import (
     All,
     Call,
@@ -112,7 +113,9 @@ def read_answer(question: Question, answer: NoulAnswer | ChoiceAnswer | ScoreAns
 
 def calibrated(answer: dict, temperature: float) -> dict:
     """An answer with its log-odds divided by `temperature`. The choice itself never changes,
-    only how sure it reads; a score is the expected level of its tempered probabilities."""
+    only how sure it reads; a score is the expected level of its tempered probabilities, and the
+    confidence a rule tests is worked out again from them by the formula the judge reports it
+    with."""
     if temperature == 1:
         return answer
     if answer["type"] == "noul":
@@ -129,6 +132,15 @@ def calibrated(answer: dict, temperature: float) -> dict:
     tempered = answer | {"probabilities": probabilities}
     if answer["type"] == "score":
         tempered["value"] = sum(int(level) * p for level, p in probabilities.items())
+        levels = sorted(probabilities, key=int)
+        tempered["confidence"] = score_confidence([probabilities[level] for level in levels])
+    else:
+        # How far the chosen option stands above even odds, as `choice_confidence` reports it
+        # for the likeliest option: the same number whenever a judge chose its likeliest option,
+        # and less, down to none, for an answer its own probabilities argue against.
+        uniform = 1 / len(probabilities)
+        chosen = probabilities[answer["value"]]
+        tempered["confidence"] = max(0.0, (chosen - uniform) / (1 - uniform))
     return tempered
 
 
