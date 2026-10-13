@@ -66,8 +66,8 @@ its calls are billed:
 export TYPESAFE_API_KEY=<your key>
 ```
 
-Jev is the default backend, so with the key set, leave `--backend ruling
---max-workers 1` off the commands below. The model defaults to `jev-latest`;
+Jev is the default backend, so with the key set, leave `--backend ruling` off
+the commands below. The model defaults to `jev-latest`;
 pass `--model` with a pinned version for results you want to reproduce.
 
 </details>
@@ -86,8 +86,9 @@ uv run --directory ../ruling ruling serve
 ```
 
 Leave that server running and run the remaining commands from `rulesmith` in
-your original terminal. Ruling downloads its model on first use and answers one
-request at a time, hence `--max-workers 1`.
+your original terminal. Ruling downloads its model on first use. On an NVIDIA GPU it
+answers the same requests through vLLM instead of MLX; see
+[Ruling's reference](https://github.com/bradAGI/ruling/blob/main/docs/reference.md#on-nvidia-vllm).
 
 Ruling can also fine-tune the judge on your labeled examples and serve the
 result: `rulesmith tune task.json --output tuning` writes the records its
@@ -131,7 +132,7 @@ rulesmith says so rather than guessing.
 export OPENAI_API_KEY=<your key>
 ```
 
-Then use `--backend openai` in place of `--backend ruling --max-workers 1`. The
+Then use `--backend openai` in place of `--backend ruling`. The
 model defaults to `gpt-4.1`, the strongest OpenAI model that still returns
 log-probabilities (the GPT-6 models and most GPT-5 ones do not); pass `--model` for another, and `--base-url`
 (or `OPENAI_BASE_URL`) for a server other than OpenAI's. The proposer below
@@ -191,7 +192,7 @@ one right answer, or a grader instead of labels: see [Tasks](tasks.md).
 
 ```sh
 uv run rulesmith optimize task.json \
-  --backend ruling --max-workers 1 \
+  --backend ruling \
   --reflection-model "$REFLECTION_MODEL" \
   --reflection-base-url "$REFLECTION_BASE_URL" \
   --output runs/my-task
@@ -230,10 +231,10 @@ on a resumed run searches further.
 
 ```sh
 uv run rulesmith evaluate task.json runs/my-task/plan.json \
-  --backend ruling --max-workers 1 --split test --output runs/my-task/test.json
+  --backend ruling --split test --output runs/my-task/test.json
 
 uv run rulesmith run runs/my-task/plan.json examples/support-routing/input.json \
-  --backend ruling --max-workers 1
+  --backend ruling
 ```
 
 Output (trimmed):

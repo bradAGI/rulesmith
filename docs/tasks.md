@@ -185,7 +185,7 @@ reference:
 
 ```sh
 uv run rulesmith optimize task.json \
-  --backend ruling --max-workers 1 \
+  --backend ruling \
   --reflection-model "$REFLECTION_MODEL" --reflection-base-url "$REFLECTION_BASE_URL" \
   --grader-model "$GRADER_MODEL" --grader-base-url "$GRADER_BASE_URL" \
   --output runs/my-task

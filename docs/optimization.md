@@ -39,7 +39,7 @@ The test split never reaches the optimizer. Score it once, after selection:
 
 ```sh
 uv run rulesmith evaluate task.json runs/my-task/plan.json --split test \
-  --backend ruling --max-workers 1 --output runs/my-task/test.json
+  --backend ruling --output runs/my-task/test.json
 ```
 
 ## Settings

@@ -140,7 +140,7 @@ Ruling judge:
 
 ```sh
 uv run rulesmith calibrate examples/ticket-triage/task.json examples/ticket-triage/graph.rules \
-  --backend ruling --max-workers 1 --output runs/triage.rules
+  --backend ruling --output runs/triage.rules
 ```
 
 ```
@@ -178,7 +178,7 @@ calls it made, so the line lands where escalating stops paying for itself:
 
 ```sh
 uv run rulesmith calibrate task.json graph.rules --output calibrated.rules \
-  --backend ruling --max-workers 1 \
+  --backend ruling \
   --judge large=ruling:mlx-community/Qwen3.6-35B-A3B-4bit@http://127.0.0.1:8012 \
   --judge-cost large=0.2
 ```
@@ -290,9 +290,27 @@ always: ask "Which team handles this?" [billing: "Charges."] [technical: "Bugs."
 ```
 
 ```sh
-uv run rulesmith run graph.rules input.json --backend ruling --max-workers 1 \
+uv run rulesmith run graph.rules input.json --backend ruling \
   --judge large=ruling:mlx-community/Qwen3.6-35B-A3B-4bit@http://127.0.0.1:8012
 ```
+
+One Ruling process can serve both judges. `RULING_MODELS` names a JSON file of
+further models the server answers for by name, and a name served there is
+the model in a `--judge` spec. With no `@URL`, a named Ruling judge goes to
+`RULING_BASE_URL`, the same default server as the graph's own:
+
+```json
+{"large": {"model": "mlx-community/Qwen3.6-35B-A3B-4bit"}}
+```
+
+```sh
+RULING_MODELS=models.json uv run --directory ../ruling ruling serve
+uv run rulesmith run graph.rules input.json --backend ruling --judge large=ruling:large
+```
+
+An entry may also name an `adapter` and its `calibration`, and adapters on one
+base share a single copy of its weights. `GET /v1/models` lists each name with
+any temperature the server already applies to its answers.
 
 A judgment kept as a fallback is asked only when every rule ahead of it has
 declined, so the larger judge costs nothing on the inputs the small one settles.

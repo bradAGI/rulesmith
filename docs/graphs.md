@@ -305,7 +305,7 @@ else (here, only when the router answered billing), and its work rolls up into
 the result under its name:
 
 ```sh
-uv run rulesmith run examples/ticket-handling/map.json ticket.json --backend ruling --max-workers 1
+uv run rulesmith run examples/ticket-handling/map.json ticket.json --backend ruling
 ```
 
 Output (trimmed), for a ticket about a duplicate $40 charge:
@@ -348,7 +348,7 @@ Then search the unit on it:
 
 ```sh
 uv run rulesmith optimize billing-task.json examples/ticket-handling/map.json --unit billing \
-  --backend ruling --max-workers 1 --reflection-model "$REFLECTION_MODEL" --output runs/billing
+  --backend ruling --reflection-model "$REFLECTION_MODEL" --output runs/billing
 ```
 
 Search starts from the unit's graph, and the winner is placed back where the

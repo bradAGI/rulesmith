@@ -43,7 +43,7 @@ they stand:
 ```sh
 uv run rulesmith validate examples/support-routing/task.json examples/support-routing/graph.rules
 uv run rulesmith run examples/support-routing/graph.rules examples/support-routing/input.json \
-  --backend ruling --max-workers 1
+  --backend ruling
 ```
 
 Output (trimmed):
@@ -84,7 +84,7 @@ address once it is ready:
 
 ```sh
 uv run rulesmith serve examples/order-review examples/support-routing \
-  --backend ruling --max-workers 1 --trace decisions.jsonl
+  --backend ruling --trace decisions.jsonl
 ```
 
 ```text
@@ -139,7 +139,7 @@ names the model each call went to under `called`.
 | Backend | Flag | Model | Endpoint | Credential |
 | --- | --- | --- | --- | --- |
 | Jev (hosted) | `--backend typesafe` (default) | `jev-latest`, or `--model` | `TYPESAFE_BASE_URL`, default `https://api.typesafe.ai` | `TYPESAFE_API_KEY` |
-| Ruling (local) | `--backend ruling` | whatever Ruling serves | `RULING_BASE_URL`, default `http://127.0.0.1:8010` | `RULING_API_KEY` if auth is on |
+| Ruling (local) | `--backend ruling` | `default`, or any name Ruling serves (`GET /v1/models` lists them) | `RULING_BASE_URL`, default `http://127.0.0.1:8010` | `RULING_API_KEY` if auth is on |
 | Clef-flash (local) | `--backend clef` | `clef-flash` | `CLEF_BASE_URL`, default `http://127.0.0.1:8000` | none |
 | Any OpenAI-compatible chat API | `--backend openai` | `gpt-4.1`, or `--model` | `OPENAI_BASE_URL`, default `https://api.openai.com/v1` | `OPENAI_API_KEY`, none for a local server |
 
@@ -158,8 +158,15 @@ an error naming the model. A model must also answer with the letter at once: one
 that opens with a thinking block, such as Qwen3 with thinking on, is refused too.
 A choice may have at most 26 options.
 
-Jev answers requests in parallel, so the default `--max-workers 4` applies;
-Ruling and Clef-flash serialize them, so use `--max-workers 1`. Clef-flash is
+`--max-workers` (default 4) is how many requests rulesmith keeps open at once,
+so pick it by what the judge does with them. Jev answers them in parallel, so
+more workers finish sooner. Ruling on a Mac answers one at a time per model and
+queues the rest, so more workers are safe but only add waiting; Ruling serving
+through vLLM batches them on the GPU, so more workers pay there. Ruling turns
+away requests beyond `RULING_MAX_PENDING` (default 64) with a 429 and a
+`Retry-After`, which rulesmith waits out when `--retries` allows, so keep the
+workers of every run sharing one server under that. Clef-flash's servers
+answer one at a time, so use `--max-workers 1` with them. Clef-flash is
 Cloudflare's trained 9B decision model, and there are two ways to serve it.
 
 On Linux with an NVIDIA GPU, `rulesmith clef-serve` runs

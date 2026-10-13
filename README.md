@@ -35,14 +35,14 @@ Python 3.12 to 3.14. Extras for the games and benchmarks are listed in the
 
 ## Quickstart
 
-With a judge running ([Ruling](https://github.com/bradAGI/ruling) on a Mac,
+With a judge running ([Ruling](https://github.com/bradAGI/ruling) on a Mac or through vLLM,
 Cloudflare's Clef-flash on an NVIDIA GPU or a Mac, TypeSafe's hosted Jev, or any
 OpenAI-compatible chat API that returns log-probabilities), any OpenAI-compatible model to write the rules, and a
 labeled task such as [this one](examples/support-routing/task.json):
 
 ```sh
 export OPENAI_API_KEY=local-no-auth   # a local model server takes any key
-rulesmith optimize task.json --backend ruling --max-workers 1 \
+rulesmith optimize task.json --backend ruling \
   --reflection-model "openai/<model>" --reflection-base-url http://127.0.0.1:8080/v1 \
   --output runs/my-task
 rulesmith run runs/my-task/plan.rules input.json --backend ruling
