@@ -275,6 +275,25 @@ to the rules is then a diff a reviewer can read beside the scorecard it moved, a
 on, which the scorecard names; after changing the judge, run `calibrate` and `evaluate` again
 and commit both.
 
+## Teaching the judge
+
+A Ruling judge can learn the task it is asked about. Start Ruling with a ledger
+(`RULING_LEDGER=ledger.sqlite`) and search with `--teach-judge`:
+
+```sh
+rulesmith optimize task.json --backend ruling --teach-judge ...
+```
+
+Every time the judge answers a label question about a train example (a choice
+whose options are the task's labels), the example's label is reported to Ruling
+as that decision's outcome. Ruling's `retrain` then fine-tunes the judge on
+those decisions and serves the result when it scores better; see
+[Learn from your own traffic](https://github.com/bradAGI/ruling/blob/main/docs/reference.md#learn-from-your-own-traffic).
+Validation and test labels are never sent: the search is measured on them, and
+a judge that had seen them would make its score meaningless. An example that
+accepts several labels teaches nothing, since none of them is the one right
+answer. Judges named with `--judge` are not taught.
+
 ## What search writes
 
 Search writes rules, not prompts. On the [job-postings benchmark](benchmarks.md)

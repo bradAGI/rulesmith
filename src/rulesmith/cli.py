@@ -47,6 +47,7 @@ from rulesmith.runtime import (
     digest,
 )
 from rulesmith.serve import make_server
+from rulesmith.teach import RulingClient, Teaching
 from rulesmith.tuning import BASE, FILES, taught, tune
 
 # The games load only for a task that plays one (see game), so a core install without their
@@ -116,6 +117,14 @@ def parser() -> argparse.ArgumentParser:
         if name == "optimize":
             command.add_argument(
                 "plan", type=Path, nargs="?", help="Seed graph; defaults to the majority label"
+            )
+            command.add_argument(
+                "--teach-judge",
+                action="store_true",
+                help="Report each train example's label to the Ruling judge as the outcome of the "
+                "label questions it answers, so `ruling retrain` can tune it on the task; needs "
+                "--backend ruling and a server started with RULING_LEDGER. Validation and test "
+                "labels are never sent",
             )
         else:
             command.add_argument("plan", type=Path)
@@ -507,12 +516,19 @@ def positive(text: str) -> int:
     return value
 
 
-def judge(args: argparse.Namespace, needed: bool):
-    """The judge model, and a client for it when some graph calls it."""
+def judge(args: argparse.Namespace, needed: bool, task: Task | None = None):
+    """The judge model, and a client for it when some graph calls it: a teaching one when the
+    search is to report the task's train labels to a Ruling server."""
     model, connection = resolve_backend(args.backend, args.model, args.base_url)
     if not needed:
         return model, nullcontext()
     retry = RetryPolicy(max_retries=args.retries)
+    if getattr(args, "teach_judge", False):
+        if args.backend != "ruling":
+            raise SystemExit(
+                "--teach-judge reports outcomes to a Ruling server; use --backend ruling"
+            )
+        return model, Teaching(RulingClient(**connection, timeout=args.timeout, retry=retry), task)
     return model, connect(args.backend, connection, args.timeout, retry)
 
 
@@ -1084,6 +1100,7 @@ def command(cli: argparse.ArgumentParser, args: argparse.Namespace) -> None:
         args,
         args.command == "optimize"
         or any(graph.asks_own_judge() for graph in (plan, opponent) if graph),
+        task if isinstance(task, Task) else None,
     )
     with ExitStack() as stack:
         client = stack.enter_context(judge_client)
