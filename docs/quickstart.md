@@ -81,7 +81,7 @@ checkout:
 
 ```sh
 git clone https://github.com/bradAGI/ruling.git ../ruling
-uv sync --directory ../ruling
+uv sync --no-dev --directory ../ruling     # --extra vision to ask about images
 uv run --directory ../ruling ruling serve
 ```
 

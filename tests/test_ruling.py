@@ -30,8 +30,9 @@ def ruling_client(request):
 
 @pytest.fixture
 def ruling_model(ruling_client):
+    """The server's primary model, first in a list that may also name adapters and other bases."""
     models = ruling_client.models.list().models
-    assert len(models) == 1
+    assert models
     return models[0].name
 
 

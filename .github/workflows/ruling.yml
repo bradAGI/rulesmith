@@ -1,0 +1,34 @@
+name: Ruling compatibility
+
+# rulesmith's live tests against the current main of ruling, the local judge it documents.
+# Not on every push: the judge needs an Apple Silicon runner and a 2.5 GB model download,
+# and a break on ruling's side should not block rulesmith's own changes.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  live:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: bradAGI/ruling
+          path: ruling
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-${{ runner.os }}-qwen3.5-0.8b-4bit
+      - run: uv sync --locked
+      - run: uv sync --no-dev --directory ruling
+      - name: Serve ruling on the small model
+        run: |
+          RULING_MODEL=mlx-community/Qwen3.5-0.8B-4bit uv run --directory ruling ruling serve &
+          for i in $(seq 1 180); do curl -sf http://127.0.0.1:8010/health && break; sleep 2; done
+          curl -sf http://127.0.0.1:8010/health
+      - run: uv run pytest -q tests/test_ruling.py --ruling-url http://127.0.0.1:8010
