@@ -5,6 +5,7 @@ test examples in a holdout file the trainer refuses to overlap, so a tuned judge
 rows it has never seen."""
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -80,14 +81,16 @@ def export(task: Task, directory: Path, found: dict[str, list[dict]] | None = No
 
 
 def trainer(ruling_dir: Path) -> list[str] | None:
-    """How to invoke Ruling from its checkout: its own environment when it has one, else through
-    uv; None where there is no checkout."""
+    """How to invoke Ruling: from its checkout, through its own environment when it has one and
+    through uv otherwise; or, with no checkout there, the `ruling` command an install from PyPI
+    puts on the path. None when there is neither."""
     executable = ruling_dir / ".venv" / "bin" / "ruling"
     if executable.exists():
         return [str(executable)]
     if (ruling_dir / "pyproject.toml").exists():
         return ["uv", "run", "--directory", str(ruling_dir), "ruling"]
-    return None
+    installed = shutil.which("ruling")
+    return [installed] if installed else None
 
 
 def tune(
@@ -106,7 +109,8 @@ def tune(
     command = trainer(ruling_dir)
     if command is None:
         raise FileNotFoundError(
-            f"no Ruling checkout at {ruling_dir}; the records are written under {directory}, "
+            f"no Ruling checkout at {ruling_dir} and no `ruling` command on the path "
+            f"(`pip install ruling`); the records are written under {directory}, "
             f"and `ruling train --data {directory / 'train.jsonl'} --holdout "
             f"{directory / 'holdout.jsonl'} --output {directory / 'adapter'}` trains on them"
         )

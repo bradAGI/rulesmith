@@ -86,8 +86,10 @@ def test_tune_runs_ruling_on_the_records_and_says_how_to_serve_the_adapter(tmp_p
     assert "RULING_ADAPTER=" in printed["serve_command"] and " serve" in printed["serve_command"]
 
 
-def test_tune_refuses_a_game_an_existing_output_and_a_missing_checkout(tmp_path):
+def test_tune_refuses_a_game_an_existing_output_and_a_missing_checkout(tmp_path, monkeypatch):
     checkout = fake_ruling(tmp_path)
+    # With `ruling` on the path a missing checkout is no longer an error, so keep it off here.
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-path"))
     task = write(tmp_path / "task.json", labeled_task().model_dump(mode="json"))
     doom = write(tmp_path / "doom.json", {"scenario": "basic", "labels": ["ATTACK"]})
     assert (
@@ -192,3 +194,21 @@ def test_arguments_after_a_double_dash_are_refused_where_nothing_takes_them(tmp_
     task = write(tmp_path / "task.json", labeled_task().model_dump(mode="json"))
     result = invoke("validate", task, tmp_path / "graph.rules", "--", "--steps", "50")
     assert result.returncode == 2 and "after --" in result.stderr
+
+
+def test_an_installed_ruling_trains_when_there_is_no_checkout(tmp_path, monkeypatch):
+    """`pip install ruling` puts a `ruling` command on the path; a checkout is then optional."""
+    import shutil
+
+    from rulesmith.tuning import trainer
+
+    nowhere = tmp_path / "nowhere"
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    assert trainer(nowhere) is None
+    monkeypatch.setattr(
+        shutil, "which", lambda name: "/opt/bin/ruling" if name == "ruling" else None
+    )
+    assert trainer(nowhere) == ["/opt/bin/ruling"]
+    # A checkout with its own environment still comes first.
+    checkout = fake_ruling(tmp_path)
+    assert trainer(checkout) == [str(checkout / ".venv" / "bin" / "ruling")]
