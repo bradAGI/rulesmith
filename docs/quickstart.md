@@ -90,10 +90,9 @@ answers the same requests through vLLM instead of MLX; see
 
 Ruling can also fine-tune the judge on your labeled examples and serve the
 result: `rulesmith tune task.json --output tuning` writes the records its
-trainer reads, with the test split held out, runs the training from a Ruling
-checkout beside yours (`git clone https://github.com/bradAGI/ruling.git ../ruling`,
-then `uv sync --no-dev --directory ../ruling`), and prints the line that
-serves the adapter. The graph does not
+trainer reads, with the test split held out, runs the training with the
+`ruling` you installed (or a checkout at `../ruling`, which wins when there is
+one), and prints the line that serves the adapter. The graph does not
 know or care that its judge is tuned, and the
 [benchmarks](benchmarks.md#a-judge-tuned-on-the-same-examples) show what a tune
 on a hundred examples is worth: it lifts the judge, and the graph on top of it
