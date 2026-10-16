@@ -1,6 +1,6 @@
 [project]
 name = "rulesmith"
-version = "0.1.1"
+version = "0.1.2"
 description = "Search for rule programs that ask a small judge for typed decisions, with DSPy and GEPA."
 dynamic = ["readme"]
 license = "MIT"
