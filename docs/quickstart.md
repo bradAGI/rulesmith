@@ -76,13 +76,11 @@ pass `--model` with a pinned version for results you want to reproduce.
 <summary><b>Ruling, local</b></summary>
 
 [Ruling](https://github.com/bradAGI/ruling) runs on an Apple Silicon Mac and
-needs no account. In a separate terminal, starting from your `rulesmith`
-checkout:
+needs no account. In a separate terminal:
 
 ```sh
-git clone https://github.com/bradAGI/ruling.git ../ruling
-uv sync --no-dev --directory ../ruling     # --extra vision to ask about images
-uv run --directory ../ruling ruling serve
+pip install ruling     # or: uv tool install ruling; add [vision] to ask about images
+ruling serve
 ```
 
 Leave that server running and run the remaining commands from `rulesmith` in
@@ -92,8 +90,10 @@ answers the same requests through vLLM instead of MLX; see
 
 Ruling can also fine-tune the judge on your labeled examples and serve the
 result: `rulesmith tune task.json --output tuning` writes the records its
-trainer reads, with the test split held out, runs the training from the
-checkout above, and prints the line that serves the adapter. The graph does not
+trainer reads, with the test split held out, runs the training from a Ruling
+checkout beside yours (`git clone https://github.com/bradAGI/ruling.git ../ruling`,
+then `uv sync --no-dev --directory ../ruling`), and prints the line that
+serves the adapter. The graph does not
 know or care that its judge is tuned, and the
 [benchmarks](benchmarks.md#a-judge-tuned-on-the-same-examples) show what a tune
 on a hundred examples is worth: it lifts the judge, and the graph on top of it
