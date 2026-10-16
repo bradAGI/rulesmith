@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import time
+from email.utils import parsedate_to_datetime
 from types import TracebackType
 from typing import NamedTuple, Self
 
@@ -82,12 +83,16 @@ class RulingClient:
             else:
                 if response.is_success:
                     return response.json()
+                wait = retry_after(response.headers.get("Retry-After"))
                 if last or response.status_code not in self.retry.http_statuses:
                     raise RulingError(
                         f"{self.http.base_url}{path} answered {response.status_code}: "
                         f"{response.text}"
                     )
-            time.sleep(min(self.retry.backoff_initial * 2**attempt, self.retry.backoff_max))
+            # A server that says how long it needs is believed; one that does not gets backoff.
+            if wait is None:
+                wait = min(self.retry.backoff_initial * 2**attempt, self.retry.backoff_max)
+            time.sleep(wait)
             attempt += 1
 
     def close(self) -> None:
@@ -103,6 +108,19 @@ class RulingClient:
         traceback: TracebackType | None,
     ) -> None:
         self.close()
+
+
+def retry_after(header: str | None) -> float | None:
+    """Seconds a `Retry-After` header asks for, given as a delay or as a date; None without one."""
+    if header is None:
+        return None
+    try:
+        return max(0.0, float(header))
+    except ValueError:
+        try:
+            return max(0.0, parsedate_to_datetime(header).timestamp() - time.time())
+        except (ValueError, TypeError):
+            return None
 
 
 def parse_answer(answer: dict) -> NoulAnswer | ChoiceAnswer | ScoreAnswer:
@@ -130,11 +148,16 @@ def state_key(state) -> str:
     return json.dumps(state, sort_keys=True, ensure_ascii=False)
 
 
+def _children(value):
+    return value.values() if isinstance(value, dict) else value if isinstance(value, list) else ()
+
+
 class Teaching:
     """The judge's client for a search, which reports the train label as the outcome of every
     label question answered about a train example. A label question is a choice whose options
     are task labels; the label is then exactly its right answer. An example with other accepted
-    labels has no single right answer and teaches nothing."""
+    labels has no single right answer and teaches nothing. A decision about a held-out example
+    teaches nothing either, even when that example's state happens to contain a train state."""
 
     def __init__(self, client: RulingClient, task: Task):
         self.client = client
@@ -144,6 +167,8 @@ class Teaching:
             for example in task.train
             if example.label is not None and not example.accepted
         }
+        held_out = [*task.validation, *task.test, *task.calibration]
+        self.held_out = {state_key(example.state) for example in held_out}
         self.taught = 0
 
     def system_one(self, *, state, questions: dict[str, dict], model: str) -> SystemOneResponse:
@@ -165,15 +190,19 @@ class Teaching:
         )
 
     def _lesson(self, asked) -> str | None:
-        """The train label of the example whose state `asked` is, or holds at any depth."""
+        """The train label of the example whose state `asked` is, or holds at any depth, unless
+        it is or holds a held-out example's state."""
+        return None if self._holds(asked, self.held_out) else self._found(asked)
+
+    def _found(self, asked) -> str | None:
         found = self.lessons.get(state_key(asked))
         if found is not None:
             return found
-        children = (
-            asked.values() if isinstance(asked, dict) else asked if isinstance(asked, list) else ()
-        )
-        return next(
-            (label for child in children if (label := self._lesson(child)) is not None), None
+        return next((label for child in _children(asked) if (label := self._found(child))), None)
+
+    def _holds(self, asked, keys: set[str]) -> bool:
+        return state_key(asked) in keys or any(
+            self._holds(child, keys) for child in _children(asked)
         )
 
     def close(self) -> None:

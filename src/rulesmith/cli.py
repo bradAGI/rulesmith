@@ -528,6 +528,10 @@ def judge(args: argparse.Namespace, needed: bool, task: Task | None = None):
             raise SystemExit(
                 "--teach-judge reports outcomes to a Ruling server; use --backend ruling"
             )
+        if task is None:
+            raise SystemExit(
+                "--teach-judge reports a task's labels, and this task has none to report"
+            )
         return model, Teaching(RulingClient(**connection, timeout=args.timeout, retry=retry), task)
     return model, connect(args.backend, connection, args.timeout, retry)
 
