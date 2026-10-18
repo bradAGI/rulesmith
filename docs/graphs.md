@@ -133,7 +133,10 @@ Two commands for reading a graph rather than running it.
 
 **`draw`** writes it as a Mermaid flowchart, which is the readable form for the
 graphs rules cannot express: solid arrows carry values, a gray box is a
-condition, and a dashed arrow leads from a condition to the rule it gates.
+condition, and a dashed arrow leads from a condition to the rule it gates. From
+Python, `rulesmith.diagram.draw(plan)` is the same drawing as data, boxes and
+edges with each unit's boxes naming the unit they sit in, for a canvas to lay out;
+`Drawing.to_dict()` is its JSON.
 
 ```sh
 uv run rulesmith draw examples/support-routing/graph.rules

@@ -6,8 +6,9 @@ from pathlib import Path
 import pytest
 from test_graph import binary_plan
 
-from rulesmith.diagram import mermaid
+from rulesmith.diagram import draw, mermaid
 from rulesmith.graph import Plan
+from rulesmith.maps import load
 from rulesmith.rules import compile_rules
 
 GRAPHS = sorted((Path(__file__).resolve().parents[1] / "examples/doom/graphs").glob("*.json"))
@@ -120,3 +121,83 @@ def test_every_condition_is_a_box_fed_by_what_it_reads():
     assert re.search(rf"^\s*n0 --> {box}$", single, re.MULTILINE) and conditions(single) == [
         (box, "n1")
     ]
+
+
+def test_a_drawing_names_every_node_and_frames_a_unit_inside_its_unit():
+    # The drawing is what a canvas lays out: every node of the map and of each unit is a box,
+    # a unit's boxes name the unit they sit in, and every arrow joins two boxes it holds.
+    plan = load(Path(__file__).resolve().parents[1] / "examples/trust-safety/map.json")
+    drawn = draw(plan)
+    ids = [box.id for box in drawn.boxes]
+    assert len(ids) == len(set(ids))
+    for edge in drawn.edges:
+        assert edge.source in ids and edge.target in ids
+    units = [box for box in drawn.boxes if box.kind == "unit"]
+    assert {u.name for u in units} == {n for n, node in plan.nodes.items() if node.type == "graph"}
+    for unit in units:
+        inner = {box.name for box in drawn.boxes if box.unit == unit.id and box.type}
+        assert inner == set(plan.nodes[unit.name].plan.nodes)
+    # A gate points at the unit as a whole, from a condition box outside it.
+    by_id = {box.id: box for box in drawn.boxes}
+    gates = [e for e in drawn.edges if e.kind == "gate" and by_id[e.target].kind == "unit"]
+    assert gates and all(by_id[e.source].kind == "condition" for e in gates)
+    assert all(by_id[e.source].unit is None for e in gates)
+
+
+def test_a_closed_drawing_keeps_the_units_and_nothing_inside_them():
+    plan = load(Path(__file__).resolve().parents[1] / "examples/trust-safety/map.json")
+    drawn = draw(plan, closed=True)
+    assert drawn.closed and all(box.unit is None for box in drawn.boxes)
+    assert [box.kind for box in drawn.boxes].count("unit") == 3
+    ids = {box.id for box in drawn.boxes}
+    assert all(e.source in ids and e.target in ids for e in drawn.edges)
+
+
+def test_a_drawing_is_plain_data():
+    import json
+
+    plan = compile_rules("read x in [0, 9]\nwhen x >= 5: yes\nalways: no")
+    data = json.loads(json.dumps(draw(plan).to_dict()))
+    assert set(data) == {"closed", "boxes", "edges"}
+    assert {box["kind"] for box in data["boxes"]} == {"read", "condition", "rule", "join", "output"}
+    assert all(isinstance(box["lines"], list) for box in data["boxes"])
+    ranked = sorted(e["rank"] for e in data["edges"] if e["kind"] == "rank")
+    assert ranked == [1, 2]
+
+
+def test_the_flowchart_draws_exactly_the_drawing():
+    # The Mermaid text is one rendering of the drawing: every box and arrow, nothing else.
+    plan = load(Path(__file__).resolve().parents[1] / "examples/trust-safety/map.json")
+    drawn, text = draw(plan), mermaid(plan)
+    for box in drawn.boxes:
+        assert re.search(rf"^\s*{box.id}[\[({{/]", text, re.MULTILINE), box.id
+    arrows = re.findall(r"^\s*(\w+) [-.=]+>(?:\|[^|]*\|)? (\w+)$", text, re.MULTILINE)
+    assert len(arrows) == len(drawn.edges)
+    by_id = {box.id: box for box in drawn.boxes}
+    for edge in drawn.edges:
+        framed = by_id[edge.target].kind == "unit" and by_id[edge.source].unit != edge.target
+        assert (edge.source, f"{edge.target}_unit" if framed else edge.target) in arrows, edge
+
+
+def test_a_gated_ordered_decision_shows_its_gate():
+    # A coalesce can carry a condition like any node; drawn without it, the decision looked
+    # as if it always ran.
+    plan = Plan.model_validate(
+        {
+            "nodes": {
+                "x": {"type": "read", "path": ["x"], "bounds": [0, 9]},
+                "a": {"type": "value", "value": "A"},
+                "pick": {
+                    "type": "coalesce",
+                    "sources": ["a"],
+                    "when": {"type": "present", "node": "x"},
+                },
+            },
+            "outputs": {"label": {"type": "node", "node": "pick"}},
+        }
+    )
+    drawn = draw(plan)
+    (gate,) = [e for e in drawn.edges if e.kind == "gate"]
+    by_id = {box.id: box for box in drawn.boxes}
+    assert by_id[gate.target].name == "pick" and by_id[gate.source].lines == ("x is present",)
+    assert conditions(mermaid(plan)) == [(gate.source, gate.target)]
