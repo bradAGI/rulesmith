@@ -211,7 +211,10 @@ from the checkout at `--ruling-dir` (default `$RULING_DIR`, else `../ruling`)
 with the recipe the benchmark validated, 200 steps with the best of ten
 validation checkpoints kept, on `--base`, a pure-attention model Ruling trains
 at full speed. Anything after `--` goes to `ruling train` and overrides the
-recipe. It prints where the adapter is and the line that serves it; rulesmith
+recipe; a task whose states run long needs `-- --max-tokens 6144` or so, since
+the trainer leaves out every example over its limit (1,024 tokens by default)
+and its validation line then counts how many it kept. It prints where the
+adapter is and the line that serves it; rulesmith
 then asks that judge like any other. The
 [benchmarks](benchmarks.md#a-judge-tuned-on-the-same-examples) measure what a
 tune on a hundred examples changes. Jev calls are billed: the
