@@ -30,7 +30,7 @@ from rulesmith.calibrate import (
     measure,
 )
 from rulesmith.chat_judge import ChatClient, ChatJudgeError
-from rulesmith.diagram import mermaid
+from rulesmith.diagram import draw, mermaid
 from rulesmith.extract import Extractor
 from rulesmith.grade import Graded, Grader, model_name
 from rulesmith.graph import Graph, Plan, Task
@@ -311,6 +311,11 @@ def parser() -> argparse.ArgumentParser:
         "--closed",
         action="store_true",
         help="Draw each unit as one box rather than opening it, so a map reads as a map",
+    )
+    draw.add_argument(
+        "--json",
+        action="store_true",
+        help="Write the drawing as data, boxes and edges, rather than as Mermaid",
     )
     for name, summary in (
         ("tune", "Fine-tune the judge on a task's examples with Ruling, test split held out"),
@@ -959,7 +964,11 @@ def command(cli: argparse.ArgumentParser, args: argparse.Namespace) -> None:
         draft_labels(cli, args)
         return
     if args.command == "draw":
-        print(mermaid(read_plan(cli, args.plan), closed=args.closed))
+        plan = read_plan(cli, args.plan)
+        if args.json:
+            print(json.dumps(draw(plan, closed=args.closed).to_dict()))
+        else:
+            print(mermaid(plan, closed=args.closed))
         return
     if args.command in ("tune", "distill"):
         task = load_task(cli, args.task)

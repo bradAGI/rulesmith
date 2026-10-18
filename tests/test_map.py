@@ -7,6 +7,7 @@ import pytest
 from test_cli import invoke, write
 from test_graph import task_data
 
+from rulesmith.diagram import draw
 from rulesmith.graph import Plan
 from rulesmith.maps import MapError, load
 from rulesmith.rules import compile_rules
@@ -137,6 +138,18 @@ def test_validate_reports_the_units_and_refuses_a_hand_off_the_unit_cannot_meet(
     result = invoke("validate", task, map_file)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["units"] == {"billing": "billing.rules"}
+
+
+def test_a_map_is_drawn_as_data_with_json(tmp_path):
+    (tmp_path / "billing.rules").write_text(BILLING)
+    map_file = write(tmp_path / "support.json", router("billing.rules"))
+    drawn = invoke("draw", map_file, "--json")
+    assert drawn.returncode == 0, drawn.stderr
+    drawing = json.loads(drawn.stdout)
+    assert drawing == draw(load(map_file)).to_dict()
+    assert {box["name"] for box in drawing["boxes"] if box["kind"] == "unit"} == {"billing"}
+    closed = json.loads(invoke("draw", map_file, "--json", "--closed").stdout)
+    assert closed["closed"] and all(box["unit"] is None for box in closed["boxes"])
 
 
 def test_a_map_can_be_drawn_with_its_units_closed(tmp_path):
