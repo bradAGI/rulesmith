@@ -5,7 +5,7 @@ import re
 from test_graph import call
 
 from rulesmith.graph import Plan, Task
-from rulesmith.mine import fields, mine
+from rulesmith.mine import evidence, fields, mine
 from rulesmith.rules import compile_rules, render_rules
 from rulesmith.runtime import DecisionProgram
 
@@ -219,8 +219,11 @@ def test_the_proposer_is_shown_the_evidence_only_when_asked():
     # had search drop the judge and lose on the seeds that had been best. So it is opt-in.
     from rulesmith.optimize import SearchConfig, proposer_prompt
 
+    found = evidence(task(noisy_reviews()).train)
     quiet = proposer_prompt(task(noisy_reviews()), SearchConfig())
     assert "Fields of the inputs" in quiet
-    assert "counted on the training examples" not in quiet and "when rating" not in quiet
+    assert "counted on the training examples" not in quiet
+    assert not any(line in quiet for line in found)
     told = proposer_prompt(task(noisy_reviews()), SearchConfig(evidence=True))
-    assert "counted on the training examples" in told and "when rating" in told
+    assert "counted on the training examples" in told
+    assert all(line in told for line in found)

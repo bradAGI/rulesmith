@@ -640,6 +640,15 @@ the part it did not touch and validated as a complete graph. A proposal is kept
 only if it beats its parent on the training batch; the best validation score
 wins. The test split never reaches the optimizer.
 
+Each proposal takes a named move, shown to the proposer with an example in the
+task's own labels: `statements` sums yes/no statements and cuts the total,
+`rubric` cuts a score, `decompose` writes a layer of statements for every
+label, `second_opinion` votes two judgments, `gate` asks a judgment only where a
+reading says to, `escalate` sends the own judge's unsure answers to a named
+judge, and `free` is any other revision. The report lists the moves tried and
+which were kept. `--prefer large` asks for layers of judgments rather than one
+question, with room for them.
+
 ## Reference
 
 Every construct in one place, and a program that uses most of them:

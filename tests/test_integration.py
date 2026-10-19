@@ -9,7 +9,7 @@ from conftest import chat_reply
 from test_graph import binary_plan, call, constant_plan, ref, task_data
 
 from rulesmith.extract import Extractor
-from rulesmith.graph import Condition, Node, Plan, Question, Source, Task
+from rulesmith.graph import Call, Condition, Node, Plan, Question, Source, Task
 from rulesmith.optimize import (
     GraphAdapter,
     GraphProposer,
@@ -21,7 +21,7 @@ from rulesmith.optimize import (
     improvement_p,
     optimize_plan,
 )
-from rulesmith.rules import parts
+from rulesmith.rules import compile_rules, parts
 from rulesmith.runtime import DecisionProgram, Models, ResponseError
 
 
@@ -1039,3 +1039,81 @@ def test_one_sided_sign_test():
     assert improvement_p(1, 0) == 0.5
     assert improvement_p(10, 0) == pytest.approx(1 / 2**10)
     assert improvement_p(3, 3) > 0.5
+
+
+def test_a_search_seeded_with_statements_keeps_them_and_records_its_moves(provider, client):
+    data = task_data()
+    data["train"].append({"id": "d", "state": "request D", "label": "review"})
+    task = Task.model_validate(data)
+    seed = compile_rules(
+        'ask refund = "The customer requests a refund."\nwhen refund >= 0.5: review\nalways: accept'
+    )
+    # The seed's one line gets every example wrong; two statements summed get them all right,
+    # and a single choice gets A right and the rest wrong.
+    probabilities = {
+        "request A": {"refund": 0.6, "dispute": 0.2},
+        "request B": {"refund": 0.4, "dispute": 0.9},
+        "request D": {"refund": 0.4, "dispute": 0.9},
+    }
+    choice = 'always: ask "Classify requests." [accept: "Accept it."] [review: "Review it."]'
+    statements = (
+        'ask refund = "The customer requests a refund."\n'
+        'ask dispute = "The customer disputes a charge."\n'
+        "let risk = refund + dispute\n"
+        "when risk >= 1.2: review\n"
+        "always: accept"
+    )
+
+    def answer(request):
+        asked = probabilities[request["state"]["observation"]]
+        provider.answers = {name: {"type": "noul", "noul": p} for name, p in asked.items()} | {
+            "rule_1": {
+                "type": "choice",
+                "choice": "accept",
+                "confidence": 0.9,
+                "probabilities": {"accept": 0.9, "review": 0.1},
+            }
+        }
+
+    rules_asked = []
+
+    def propose(request):
+        shown = json.dumps(request["messages"])
+        part = shown.rsplit("Return the part named ", 1)[-1].split(".", 1)[0]
+        if part != "rules":
+            provider.completion = chat_reply(move="free", graph=components(seed)["readings"])
+            return
+        rules_asked.append(part)
+        if len(rules_asked) == 1:
+            provider.completion = chat_reply(move="free", graph=choice)
+        else:
+            provider.completion = chat_reply(move="statements", graph=statements)
+
+    provider.on_request, provider.on_chat = answer, propose
+    lm = dspy.LM(
+        "openai/fixture-model",
+        api_base=provider.url + "/v1",
+        api_key="test-placeholder",
+        cache=False,
+        num_retries=0,
+    )
+    best, report = optimize_plan(
+        task,
+        seed,
+        client,
+        "fixture-model",
+        GraphProposer(lm),
+        SearchConfig(max_metric_calls=20, reflection_batch=2),
+    )
+    assert len(rules_asked) >= 2
+    assert report["seed_validation_score"] == 0.0 and report["validation_score"] == 1.0
+    nouls = [
+        node
+        for node in best.nodes.values()
+        if isinstance(node, Call) and node.question.type == "noul"
+    ]
+    assert len(nouls) == 2
+    tried = {(move["part"], move["move"], move["kept"]) for move in report["moves"]}
+    assert {("rules", "free", True), ("rules", "statements", True)} <= tried
+    # A readings answer that restates the seed changes nothing, so it is never kept.
+    assert all(not move["kept"] for move in report["moves"] if move["part"] == "readings")
