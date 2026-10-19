@@ -23,7 +23,7 @@ from typesafe_sdk import TypeSafeClient
 from rulesmith.calibrate import tally, unmeasured
 from rulesmith.graph import Example, Measured, Name, Plan, StrictModel, Task
 from rulesmith.mine import columns, evidence, fields, mine
-from rulesmith.rules import RuleError, compile_rules, parts, quoted, whole
+from rulesmith.rules import WHOLE, RuleError, compile_rules, parts, quoted, whole
 from rulesmith.runtime import (
     DecisionProgram,
     ExecutionConfig,
@@ -671,7 +671,7 @@ def proposer_prompt(
                         "instructions": task.description,
                         "criteria": {label: applies(label) for label in task.labels[:2]},
                     },
-                    "inputs": {"request": {"type": "state"}},
+                    "inputs": {WHOLE: {"type": "state"}},
                 }
             },
             "outputs": {"label": {"type": "node", "node": "decision"}},
@@ -703,7 +703,8 @@ def proposer_prompt(
         "type, instructions, and criteria when applicable. Choice criteria map each option, "
         "which is the value the node outputs, to a description of when it applies. "
         "Never put instructions or criteria "
-        'beside question. Original input uses {"type":"state"}; it is not a node named input. '
+        'beside question. Original input uses {"type":"state"}; it is not a node named input, '
+        f"and a judgment reads it under the key {WHOLE!r}, as the rules form writes it. "
         'Every input and output source needs its type, e.g. {"type":"node","node":"decision"}; '
         "a source without type is rejected. A choice call's value is the option it picks; a "
         "score call's value is the expected position on its ordered levels; a noul call's value "

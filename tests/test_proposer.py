@@ -4,7 +4,7 @@ import dspy
 from conftest import chat_reply
 from test_graph import binary_plan, task_data
 
-from rulesmith.graph import Call, Sum, Task, Vote
+from rulesmith.graph import Call, Plan, StateInput, Sum, Task, Vote
 from rulesmith.label import Labeler
 from rulesmith.optimize import (
     GraphProposal,
@@ -15,7 +15,7 @@ from rulesmith.optimize import (
     proposer_prompt,
     text_adapter,
 )
-from rulesmith.rules import compile_rules
+from rulesmith.rules import WHOLE, compile_rules, render_rules
 
 
 def proposer(provider):
@@ -52,6 +52,17 @@ def test_a_move_is_named_beside_the_part_and_may_be_left_out():
     }
     # A model with thinking off answers with the part alone; that must still be a proposal.
     assert adapter.parse(GraphProposal, chat_reply(graph=rules)) == {"move": None, "graph": rules}
+
+
+def test_the_whole_graph_example_names_the_input_as_rules_do():
+    # A proposer copies the example's input key, and a key rules cannot write leaves a
+    # winning graph with no plan.rules.
+    task, config = fielded_task(), SearchConfig()
+    prompt = proposer_prompt(task, config)
+    example = next(line for line in prompt.splitlines() if line.startswith('{"nodes"'))
+    plan = Plan.model_validate(json.loads(example))
+    assert plan.nodes["decision"].inputs == {WHOLE: StateInput()}
+    render_rules(plan, task.criteria())
 
 
 def test_every_move_example_is_a_valid_program_that_uses_its_construct():
