@@ -93,6 +93,12 @@ def test_the_proposer_reports_the_move_with_the_part(provider):
     assert proposer(provider)("Propose rules.") == Proposal("always: review", "statements")
 
 
+def test_a_move_the_instructions_do_not_name_is_reported_as_none(provider):
+    # Models answer the field with the part's name or the schema note instead of a move.
+    provider.completion = chat_reply(move="rules", graph="always: review")
+    assert proposer(provider)("Propose rules.") == Proposal("always: review", None)
+
+
 def test_whatever_the_model_answers_becomes_the_candidate(provider):
     # Rules the compiler cannot read are reported by it, with the line, not hidden here.
     provider.completion = "when nonsense: MOVE_FORWARD"

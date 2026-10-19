@@ -87,7 +87,9 @@ class GraphProposer(dspy.Module):
         with dspy.context(lm=self.lm, adapter=text_adapter()):
             try:
                 answered = self.predict(request=request)
-                answer, move = answered.graph, answered.move
+                answer = answered.graph
+                # The field is free text; a part's name or a schema note names no move.
+                move = answered.move if answered.move in MOVES else None
             except AdapterParseError as error:
                 answer = headless_part(error)
             except ValidationError as error:
