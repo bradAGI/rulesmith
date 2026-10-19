@@ -20,7 +20,15 @@ from typesafe_sdk import RetryPolicy, TypeSafeClient, TypeSafeError
 
 from rulesmith import clef
 from rulesmith.ablate import effects
-from rulesmith.calibrate import at_prevalence, calibrate, correct, drift, fit_cutoffs, measure
+from rulesmith.calibrate import (
+    at_prevalence,
+    calibrate,
+    correct,
+    drift,
+    fit_cutoffs,
+    fit_weights,
+    measure,
+)
 from rulesmith.chat_judge import ChatClient, ChatJudgeError
 from rulesmith.diagram import mermaid
 from rulesmith.extract import Extractor
@@ -828,6 +836,8 @@ def calibration(cli: argparse.ArgumentParser, args: argparse.Namespace) -> None:
         models = graph_models(cli, args, stack, plan).remembered()
         fitted, temperatures = calibrate(plan, task, remembered, model, models)
         before = correct(fitted, held_out, remembered, model, models)
+        # Weights first: every other line on a reweighted sum is placed afterwards.
+        fitted, sums = fit_weights(fitted, task, remembered, model, models, priced)
         fitted, cutoffs = fit_cutoffs(fitted, task, remembered, model, models, priced)
         after = correct(fitted, held_out, remembered, model, models)
         fitted = measure(fitted, task, remembered, model, models)
@@ -849,6 +859,7 @@ def calibration(cli: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     report = {
         "fitted_on": task.fitted_on(),
         "temperatures": temperatures,
+        "weights": sums,
         "cutoffs": cutoffs,
         "rules": counted,
     }

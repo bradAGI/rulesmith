@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from test_cli import invoke, write
 from test_graph import task_data
 
-from rulesmith.calibrate import cuts, fit_cutoffs, fit_temperature, measure
+from rulesmith.calibrate import cuts, fit_cutoffs, fit_temperature, fit_weights, measure
 from rulesmith.chat_judge import choice_confidence, score_confidence
 from rulesmith.graph import Plan, Task
 from rulesmith.optimize import Labels
@@ -510,3 +510,101 @@ def test_at_the_real_rate_a_line_is_not_lowered_to_catch_scams_at_the_cost_of_fa
     fitted, report = fit_cutoffs(compile_rules(SCAM_RULES), real, client, "fixture")
     assert next(n for n in fitted.nodes.values() if n.when is not None).when.value == 0.5
     assert not report[0]["kept"]
+
+
+def two_nouls_by_state(provider):
+    """Two statements whose probabilities are the two numbers in the example's state."""
+
+    def answer(request):
+        first, second = re.findall(r"[0-9.]+", json.dumps(request["state"]))
+        provider.body["answers"] = {
+            "fee": {"type": "noul", "noul": float(first)},
+            "polished": {"type": "noul", "noul": float(second)},
+        }
+
+    provider.on_request = answer
+
+
+SUM_RULES = (
+    'ask fee = "The posting asks for money."\n'
+    'ask polished = "The posting reads as polished."\n'
+    "let risk = fee + polished\n"
+    "when risk >= 1: fraudulent\n"
+    "always: genuine"
+)
+
+
+def two_statement_task(scams: list[str], real: list[str]) -> Task:
+    examples = [{"id": f"p{i}", "state": s, "label": "fraudulent"} for i, s in enumerate(scams)]
+    examples += [{"id": f"n{i}", "state": s, "label": "genuine"} for i, s in enumerate(real)]
+    data = task_data() | {"labels": ["fraudulent", "genuine"], "train": examples}
+    data["validation"] = [{"id": "v", "state": "0.88 0.12", "label": "fraudulent"}]
+    data["test"] = [{"id": "t", "state": "0.91 0.09", "label": "fraudulent"}]
+    return Task.model_validate(data)
+
+
+# The fee statement separates scams from real postings; polish runs the other way, so adding
+# the two as written puts every example near 1 and the rule cannot tell them apart.
+SCAMS = ["0.9 0.1", "0.8 0.2", "0.85 0.15", "0.7 0.2", "0.75 0.1", "0.95 0.05"]
+REAL = ["0.2 0.8", "0.1 0.9", "0.15 0.85", "0.3 0.8", "0.25 0.9", "0.05 0.95"]
+
+
+def test_a_sums_weights_are_fitted_to_the_labels(provider, client):
+    two_nouls_by_state(provider)
+    task = two_statement_task(SCAMS, REAL)
+    fitted, report = fit_weights(compile_rules(SUM_RULES), task, client, "fixture")
+    weights = {term.node: term.weight for term in fitted.nodes["risk"].terms}
+    assert weights["fee"] > 0 > weights["polished"]
+    # As written, every example sums to about 1: the four scams at exactly 1 are the only hits.
+    assert report[0]["train_before"] == pytest.approx(4 / 12) and report[0]["train_after"] == 1
+    assert report[0]["kept"] and report[0]["from"] == {"fee": 1, "polished": 1, "constant": 0}
+    assert "let risk = " in render_rules(fitted) and " - " in render_rules(fitted)
+
+
+def test_weights_that_do_not_win_held_out_stay_as_written(provider, client):
+    two_nouls_by_state(provider)
+    # Both statements already separate the labels the same way, so the sum as written is right
+    # on every example and there is nothing for a fit to improve.
+    task = two_statement_task(["0.9 0.8", "0.8 0.9", "0.85 0.7"], ["0.1 0.2", "0.2 0.1", "0.3 0.2"])
+    fitted, report = fit_weights(compile_rules(SUM_RULES), task, client, "fixture")
+    assert [term.weight for term in fitted.nodes["risk"].terms] == [1, 1]
+    assert report[0]["kept"] is False
+
+
+def test_a_cut_on_a_sum_of_judgments_is_a_line_the_fit_may_move(provider, client):
+    two_nouls_by_state(provider)
+    plan = compile_rules(SUM_RULES)
+    assert [cut.tests for cut in cuts(plan)] == ["risk"]
+    # Both statements agree; scams sum to 1.5 or more and real postings to 0.6 or less, so the
+    # line at 1 already separates them, and a line written at 1.9 is moved down.
+    task = two_statement_task(["0.9 0.8", "0.8 0.9", "0.85 0.7"], ["0.1 0.2", "0.2 0.1", "0.3 0.2"])
+    moved, report = fit_cutoffs(
+        compile_rules(SUM_RULES.replace(">= 1", ">= 1.9")), task, client, "fixture"
+    )
+    assert 0.6 < moved.nodes[report[0]["rule"]].when.value < 1.5
+
+
+def test_the_cli_writes_fitted_weights_into_the_rules_file(tmp_path, provider):
+    two_nouls_by_state(provider)
+    data = two_statement_task(SCAMS, REAL).model_dump(mode="json")
+    task = write(tmp_path / "task.json", data)
+    plan = tmp_path / "plan.rules"
+    plan.write_text(SUM_RULES)
+    output = tmp_path / "calibrated.rules"
+    result = invoke(
+        "calibrate",
+        task,
+        plan,
+        "--backend",
+        "ruling",
+        "--base-url",
+        provider.url,
+        "--output",
+        output,
+    )
+    assert result.returncode == 0, result.stderr
+    fitted = compile_rules(output.read_text()).nodes["risk"]
+    weights = {term.node: term.weight for term in fitted.terms}
+    assert weights["fee"] > 0 > weights["polished"]
+    report = json.loads(result.stdout)
+    assert report["weights"][0]["kept"] and report["weights"][0]["to"]["fee"] == weights["fee"]

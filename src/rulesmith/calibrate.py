@@ -27,7 +27,9 @@ from rulesmith.graph import (
     Noul,
     Plan,
     Score,
+    Sum,
     Task,
+    Term,
     Threshold,
     Value,
 )
@@ -139,16 +141,29 @@ def descend(condition: Condition, path: tuple[int, ...]) -> Compare:
     return condition
 
 
-def cuts(plan: Plan) -> list[Cut]:
-    """Every line a rule draws on a number the judge produced: a probability, a score's expected
-    level, or how sure a judgment was. Lines drawn on readings are what the rule says about the
-    input, not about the judge, and stay where they were written."""
+def judgments(plan: Plan) -> set[str]:
+    """The nodes whose numbers come from the judge: a probability, a score's expected level, how
+    sure a judgment was, and a sum with any of those among its terms. A line drawn on one of
+    them is about the judge and may be fitted; a line on a reading is what the rule says about
+    the input and stays where it was written."""
     judged = {
         name
         for name, node in plan.nodes.items()
         if (isinstance(node, Call) and isinstance(node.question, (Noul, Score)))
         or isinstance(node, Confidence)
     }
+    return judged | {
+        name
+        for name, node in plan.nodes.items()
+        if isinstance(node, Sum) and any(term.node in judged for term in node.terms)
+    }
+
+
+def cuts(plan: Plan) -> list[Cut]:
+    """Every line a rule draws on a number the judge produced: a probability, a score's expected
+    level, or how sure a judgment was. Lines drawn on readings are what the rule says about the
+    input, not about the judge, and stay where they were written."""
+    judged = judgments(plan)
 
     def compares(condition: Condition, path: tuple[int, ...]):
         if isinstance(condition, Compare):
@@ -246,6 +261,160 @@ def fit_cutoffs(
     return plan, report
 
 
+@dataclass(frozen=True)
+class Target:
+    """The rule whose label a sum is fitted to tell apart: the first line a rule draws on the
+    sum, and the label that rule gives above it (or below it, for a `<`)."""
+
+    rule: str
+    path: tuple[int, ...] | None
+    label: str
+    above: bool
+
+
+def targets(plan: Plan) -> dict[str, Target]:
+    judged = judgments(plan)
+    found: dict[str, Target] = {}
+    for name, node in plan.nodes.items():
+        if isinstance(node, Threshold) and isinstance(plan.nodes[node.source], Sum):
+            found.setdefault(node.source, Target(name, None, node.above, True))
+        if not isinstance(node, Value) or node.when is None:
+            continue
+        for cut in cuts(plan):
+            compared = cut.tests
+            if (
+                cut.node != name
+                or not isinstance(plan.nodes[compared], Sum)
+                or compared not in judged
+            ):
+                continue
+            op = descend(node.when, cut.path).op
+            found.setdefault(compared, Target(name, cut.path, node.value, op in ("ge", "gt")))
+    return found
+
+
+def logistic(
+    rows: list[list[float]], hits: list[bool], weight: list[float]
+) -> tuple[list[float], float]:
+    """Weights and a constant that make the rows' sum largest where `hits` holds, by gradient
+    descent on the weighted log loss with a little shrinkage so a term that never varies does
+    not run away."""
+    count = len(rows[0])
+    coefficients, constant = [0.0] * count, 0.0
+    total = sum(weight)
+    for _ in range(500):
+        gradient, shift = [0.0] * count, 0.0
+        for row, hit, w in zip(rows, hits, weight, strict=True):
+            logit = constant + sum(c * x for c, x in zip(coefficients, row, strict=True))
+            error = w * (1 / (1 + math.exp(-max(-30.0, min(30.0, logit)))) - hit)
+            shift += error
+            for index, x in enumerate(row):
+                gradient[index] += error * x
+        coefficients = [
+            c - (g / total + 0.001 * c) for c, g in zip(coefficients, gradient, strict=True)
+        ]
+        constant -= shift / total
+    return coefficients, constant
+
+
+@dataclass(frozen=True)
+class Fit:
+    """One sum's terms on the fitting examples, ready to be fitted on any subset of them."""
+
+    plan: Plan
+    name: str
+    target: Target
+    rows: dict[int, list[float]]
+    hits: dict[int, bool]
+    weight: list[float]
+
+    def on(self, indices: list[int]) -> Plan:
+        """The plan with the sum reweighted by a fit on these examples and the rule's line moved
+        to the fit's own line at zero, above which the label is more likely than not."""
+        coefficients, constant = logistic(
+            [self.rows[i] for i in indices],
+            [self.hits[i] for i in indices],
+            [self.weight[i] for i in indices],
+        )
+        node = self.plan.nodes[self.name]
+        terms = [
+            Term(node=term.node, weight=coefficient)
+            for term, coefficient in zip(node.terms, coefficients, strict=True)
+        ]
+        reweighted = node.model_copy(update={"terms": terms, "constant": constant})
+        plan = self.plan.model_copy(update={"nodes": self.plan.nodes | {self.name: reweighted}})
+        line = Cut(self.target.rule, self.target.path, self.name)
+        return line.moved(Plan.model_validate(plan.model_dump()), 0.0)
+
+
+def fit_weights(
+    plan: Plan,
+    task: Task,
+    client,
+    model: str,
+    models: Models | None = None,
+    prices: Prices | None = None,
+) -> tuple[Plan, list[dict]]:
+    """The plan with every sum of judgments a rule draws a line on reweighted to tell that rule's
+    label apart: a logistic fit of the sum's terms to whether the example carries the label, with
+    the rule's line moved to the fit's own line at zero. Like a line, a fit is kept only when it
+    wins held out, fitted without each fold in turn and scored on it. The report has a row per
+    sum: its weights before and after, the training accuracy around the change, and whether it
+    was kept. Run before `fit_cutoffs`, which then places every other line on the new sum."""
+    examples = task.fitting()
+    found = targets(plan)
+    if not examples or not found:
+        return plan, []
+    weights = task.weights()
+    weight = [weights[e.label] for e in examples]
+    total = sum(weight)
+    prices = prices or Prices()
+
+    def right(candidate: Plan) -> list[float]:
+        decided = outcomes(candidate, examples, client, model, models)
+        return [
+            w * (record["correct"] - prices.charge(record["calls"]))
+            for w, record in zip(weight, decided, strict=True)
+        ]
+
+    program = DecisionProgram(plan, client, model, models=models)
+    values = [program(state=example.state).node_values for example in examples]
+    after = right(plan)
+    report = []
+    for name, target in found.items():
+        terms = [term.node for term in plan.nodes[name].terms]
+        usable = [i for i, seen in enumerate(values) if all(term in seen for term in terms)]
+        if len(usable) < 2:
+            continue
+        rows = {i: [values[i][term] for term in terms] for i in usable}
+        hits = {i: (examples[i].label == target.label) == target.above for i in usable}
+        fit = Fit(plan, name, target, rows, hits, weight)
+        folds = min(FOLDS, len(usable))
+        held_out = 0.0
+        for fold in range(folds):
+            scored = right(fit.on([i for i in usable if i % FOLDS != fold]))
+            held_out += sum(scored[i] for i in usable if i % FOLDS == fold)
+        kept = held_out > sum(after[i] for i in usable)
+        before, written, candidate = after, terms_of(plan.nodes[name]), fit.on(usable)
+        if kept:
+            plan, after = candidate, right(candidate)
+        report.append(
+            {
+                "sum": name,
+                "from": written,
+                "to": terms_of(candidate.nodes[name]),
+                "train_before": sum(before) / total,
+                "train_after": sum(after) / total,
+                "kept": kept,
+            }
+        )
+    return plan, report
+
+
+def terms_of(node: Sum) -> dict[str, float]:
+    return {term.node: term.weight for term in node.terms} | {"constant": node.constant}
+
+
 def observed(
     plan: Plan, examples: list, client, model: str, models: Models | None = None
 ) -> dict[str, list[float]]:
@@ -253,19 +422,19 @@ def observed(
     drawn between."""
     program = DecisionProgram(plan, client, model, models=models)
     seen: dict[str, list[float]] = {}
+    judged = judgments(plan)
     for example in examples:
-        answers = program(state=example.state).answers
-        for name, node in plan.nodes.items():
-            if (
-                isinstance(node, Call)
-                and name in answers
-                and isinstance(node.question, (Noul, Score))
-            ):
-                seen.setdefault(name, []).append(answers[name]["value"])
+        prediction = program(state=example.state)
+        answers, values = prediction.answers, prediction.node_values
+        for name in judged:
+            node = plan.nodes[name]
             # The confidence the judge reported, which is what a rule compares, not the
             # probability of its answer: on two options, 0.68 reads 0.36.
-            if isinstance(node, Confidence) and "confidence" in answers.get(node.source, {}):
-                seen.setdefault(name, []).append(answers[node.source]["confidence"])
+            if isinstance(node, Confidence):
+                if "confidence" in answers.get(node.source, {}):
+                    seen.setdefault(name, []).append(answers[node.source]["confidence"])
+            elif name in values:
+                seen.setdefault(name, []).append(values[name])
     return seen
 
 

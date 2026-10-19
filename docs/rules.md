@@ -127,7 +127,12 @@ gets the most of them right. It fits on the task's `calibration` examples when
 it has them, and on its training examples otherwise. A move is kept only when it also wins held out: the
 fitting examples are dealt into five folds, the line is chosen without each
 fold and scored on it, and those scores together must beat the line as written,
-so one example on the far side of a line does not move it. The questions and
+so one example on the far side of a line does not move it. A sum of judgments a
+rule draws a line on, `let risk = fee + polished` under `when risk >= 1`, is
+fitted first: its weights and constant are fitted to tell that rule's label
+apart, by a logistic fit on the same examples, and its line moves to the fit's
+own line at zero, kept under the same held-out test, so a graph of many
+statements learns which of them count and which way. The questions and
 the words of the rules stay as they were; lines drawn on readings, `rating >=
 4`, are what the rule says about the input and are not touched. Each line tried
 is reported under `cutoffs`, with its old and new place and the training
