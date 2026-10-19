@@ -7,7 +7,7 @@ import pytest
 from test_graph import binary_plan
 
 from rulesmith.diagram import draw, mermaid
-from rulesmith.graph import Plan
+from rulesmith.graph import Coalesce, Graph, NodeInput, Plan
 from rulesmith.maps import load
 from rulesmith.rules import compile_rules
 
@@ -142,6 +142,17 @@ def test_a_drawing_names_every_node_and_frames_a_unit_inside_its_unit():
     gates = [e for e in drawn.edges if e.kind == "gate" and by_id[e.target].kind == "unit"]
     assert gates and all(by_id[e.source].kind == "condition" for e in gates)
     assert all(by_id[e.source].unit is None for e in gates)
+
+
+def test_a_unit_that_is_one_answer_says_so_on_its_box():
+    # `always: hold` compiles to no nodes and a literal output, so there is nothing to draw
+    # inside the unit; its box says the answer, since the unit is that answer.
+    unit = Graph(plan=compile_rules("always: hold\n", None))
+    plan = Plan(nodes={"large": unit, "decision": Coalesce(sources=["large"])}, outputs={"label": NodeInput(node="decision")})
+    drawn = draw(plan)
+    box = next(b for b in drawn.boxes if b.kind == "unit")
+    assert box.lines == ("large", "always hold")
+    assert not any(b.unit == box.id for b in drawn.boxes)
 
 
 def test_a_closed_drawing_keeps_the_units_and_nothing_inside_them():

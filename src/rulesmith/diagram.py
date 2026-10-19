@@ -11,6 +11,7 @@ from rulesmith.graph import (
     Confidence,
     Extract,
     Graph,
+    LiteralInput,
     Merge,
     NodeInput,
     Plan,
@@ -197,7 +198,11 @@ def build(
     for name, node in plan.nodes.items():
         if isinstance(node, Graph):
             when = guard(node.when, reads, plan) if node.when is not None else None
-            lines = (name, f"answers with its {node.output}")
+            # A unit of one line, `always: hold`, has no nodes and is its answer; its box says so,
+            # since there is nothing to draw inside it.
+            answer = node.plan.outputs.get(node.output)
+            said = f"always {answer.value}" if isinstance(answer, LiteralInput) else f"answers with its {node.output}"
+            lines = (name, said)
             drawing.boxes.append(Box(ids[name], "unit", lines, name, node.type, unit, when))
             if not drawing.closed:
                 build(node.plan, f"{ids[name]}_", ids[name], drawing, (node.output, ids[name]))
