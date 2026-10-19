@@ -12,7 +12,7 @@ from contextlib import ExitStack, nullcontext, redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, get_args
 from urllib.parse import urlsplit
 
 import dspy
@@ -31,6 +31,7 @@ from rulesmith.maps import MapError, load, unit_task, units
 from rulesmith.optimize import (
     GraphProposer,
     Labels,
+    Preference,
     SearchConfig,
     described_labels,
     evaluate_plan,
@@ -128,7 +129,11 @@ def parser() -> argparse.ArgumentParser:
             )
         else:
             command.add_argument("plan", type=Path)
-        command.add_argument("--max-nodes", type=int, default=SearchConfig().max_nodes)
+        command.add_argument(
+            "--max-nodes",
+            type=int,
+            help=f"Most nodes a graph may have; {SearchConfig().max_nodes} unless --prefer large",
+        )
         command.add_argument("--max-depth", type=int, default=SearchConfig().max_depth)
         if name == "validate":
             continue
@@ -200,6 +205,13 @@ def parser() -> argparse.ArgumentParser:
             )
             command.add_argument(
                 "--max-metric-calls", type=int, default=SearchConfig().max_metric_calls
+            )
+            command.add_argument(
+                "--prefer",
+                choices=get_args(Preference),
+                default=SearchConfig().prefer,
+                help="small keeps graphs small; large asks for layers of judgments and raises "
+                "the default --max-nodes",
             )
             command.add_argument(
                 "--reflection-batch", type=int, default=SearchConfig().reflection_batch
@@ -1000,6 +1012,10 @@ def command(cli: argparse.ArgumentParser, args: argparse.Namespace) -> None:
             cli.error(f"{args.plan} has no unit named {unit!r}; a unit is a graph node")
         plan = whole.nodes[unit].plan
     if args.command != "run":
+        if args.max_nodes is None:
+            # The cap is the search's to settle, since --prefer large raises it.
+            preferred = getattr(args, "prefer", SearchConfig().prefer)
+            args.max_nodes = SearchConfig(prefer=preferred).max_nodes
         plan.check(task.labels, args.max_nodes, args.max_depth)
     if args.command == "validate":
         checked = {"nodes": len(plan.nodes), "labels": task.labels}
@@ -1067,6 +1083,7 @@ def command(cli: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     if args.command == "optimize":
         priced = prices(cli, args)
         config = SearchConfig(
+            prefer=args.prefer,
             max_nodes=args.max_nodes,
             max_depth=args.max_depth,
             max_metric_calls=args.max_metric_calls,

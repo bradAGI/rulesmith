@@ -3,6 +3,7 @@
 import hashlib
 import json
 import math
+import re
 from collections import Counter
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -10,19 +11,19 @@ from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
 from statistics import mean
-from typing import Annotated, Protocol
+from typing import Annotated, Literal, Protocol
 
 import dspy
 import gepa
 from dspy.utils.exceptions import AdapterParseError
 from gepa.core.adapter import EvaluationBatch, GEPAAdapter
-from pydantic import Field, ValidationError
+from pydantic import Field, ValidationError, model_validator
 from typesafe_sdk import TypeSafeClient
 
 from rulesmith.calibrate import tally, unmeasured
 from rulesmith.graph import Example, Measured, Name, Plan, StrictModel, Task
-from rulesmith.mine import evidence, fields, mine
-from rulesmith.rules import RuleError, parts, whole
+from rulesmith.mine import columns, evidence, fields, mine
+from rulesmith.rules import RuleError, compile_rules, parts, quoted, whole
 from rulesmith.runtime import (
     DecisionProgram,
     ExecutionConfig,
@@ -39,12 +40,38 @@ def text_adapter() -> dspy.ChatAdapter:
     return dspy.ChatAdapter(use_json_adapter_fallback=False)
 
 
+FREE = "free"
+# The ways a proposal may revise a part, each named so a run can say which were tried and kept.
+# Every searched graph once came back as read nodes and one choice: the language's other
+# judgments were described in a sentence each and never written.
+MOVES = {
+    "statements": "replace or back a choice with yes/no statements, summed and cut at a line",
+    "rubric": "ask for a position on an ordered rubric and cut it at a line",
+    "decompose": "write a layer of statements for every label, each summed and cut, ending on "
+    "a fallback",
+    "second_opinion": "ask the question twice and act only where the answers agree",
+    "gate": "ask the judge only where a reading says it is needed",
+    "escalate": "settle the own judge's sure answers by rule and ask a named judge the rest",
+    FREE: "any other revision",
+}
+
+
 class GraphProposal(dspy.Signature):
     """Revise the requested part of a decision program, using the feedback supplied."""
 
     request: str = dspy.InputField()
+    # Optional: a model with thinking off answers with the part alone, and that is a proposal.
+    move: str | None = dspy.OutputField(desc=f"The move taken, one of {', '.join(MOVES)}")
     # Rules are text, and so is the whole-graph JSON a program beyond rules falls back to.
     graph: str = dspy.OutputField(desc="The requested part, complete and alone")
+
+
+@dataclass(frozen=True)
+class Proposal:
+    """What a proposer answered: the part, and the move it says it took, where it named one."""
+
+    graph: str
+    move: str | None = None
 
 
 class GraphProposer(dspy.Module):
@@ -53,17 +80,19 @@ class GraphProposer(dspy.Module):
         self.lm = lm
         self.predict = dspy.Predict(GraphProposal)
 
-    def forward(self, prompt: str | list[dict]) -> str:
+    def forward(self, prompt: str | list[dict]) -> Proposal:
         request = prompt if isinstance(prompt, str) else json.dumps(prompt)
+        move = None
         # Syntax failures remain candidates so GEPA can score and reflect on them.
         with dspy.context(lm=self.lm, adapter=text_adapter()):
             try:
-                answer = self.predict(request=request).graph
+                answered = self.predict(request=request)
+                answer, move = answered.graph, answered.move
             except AdapterParseError as error:
                 answer = headless_part(error)
             except ValidationError as error:
                 answer = json.dumps({"generation_error": str(error)})
-        return unfenced(answer if isinstance(answer, str) else json.dumps(answer))
+        return Proposal(unfenced(answer if isinstance(answer, str) else json.dumps(answer)), move)
 
 
 def headless_part(error: AdapterParseError) -> str:
@@ -186,8 +215,19 @@ class SearchTask(Protocol):
     def model_dump_json(self) -> str: ...
 
 
+Preference = Literal["small", "large"]
+# Room for two statements and their sum per label, with the rules that cut them, for a task of
+# a dozen or so labels; a task of more sets its own cap.
+LARGE_GRAPH_NODES = 64
+
+
 class SearchConfig(StrictModel):
     max_metric_calls: int = Field(default=100, ge=1)
+    prefer: Preference = Field(
+        default="small",
+        description="Whether the proposer is told to keep graphs small or to build layers of "
+        "judgments; large also raises the node cap, unless max_nodes is set",
+    )
     max_nodes: int = Field(default=16, ge=1)
     max_depth: int = Field(default=8, ge=1)
     reflection_batch: int = Field(default=3, ge=1)
@@ -245,6 +285,14 @@ class SearchConfig(StrictModel):
         "are right at least this often on the labeled training and validation examples, smoothed "
         "by Laplace's rule; a rule over a field anyone can set is otherwise a way around it",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def room_for_large_graphs(cls, data):
+        """A layer of judgments per label does not fit the cap a small graph is held to."""
+        if isinstance(data, dict) and data.get("prefer") == "large" and "max_nodes" not in data:
+            return data | {"max_nodes": LARGE_GRAPH_NODES}
+        return data
 
     @property
     def prices(self) -> Prices:
@@ -513,6 +561,98 @@ def escalating(config: SearchConfig, judges: Sequence[str]) -> str:
     )
 
 
+def applies(label: str) -> str:
+    return f"When the input calls for {label}."
+
+
+def statements(labels: Sequence[str]) -> str:
+    """Two yes/no statements per label but the last, each pair summed and cut, and the last
+    label as the fallback: the shape a choice decomposes into."""
+    *decided, fallback = labels
+    asked, rules = [], []
+    for label in decided:
+        name = re.sub(r"\W+", "_", label)
+        asked += [
+            f"ask said_{name} = {quoted(f'The input calls for {label}.')}",
+            f"ask meant_{name} = {quoted(f'Read as a whole, the input is about {label}.')}",
+            f"let support_{name} = said_{name} + meant_{name}",
+        ]
+        rules.append(f"when support_{name} >= 1.2: {label}")
+    return "\n".join([*asked, *rules, f"always: {fallback}"])
+
+
+def gated_reading(task: SearchTask) -> tuple[str, str] | None:
+    """A reading of the inputs' first numeric field, and a test at its midpoint, for a gate."""
+    examples = [example for example in task.train if hasattr(example, "state")]
+    for (path, measure), seen in columns(examples).items():
+        if measure == "value" and not isinstance(seen[0], str):
+            name, low, high = ".".join(path), min(seen), max(seen)
+            return f"read {name} in [{low:g}, {high:g}]", f"{name} >= {(low + high) / 2:g}"
+    return None
+
+
+def move_examples(task: SearchTask, judges: Sequence[str], max_nodes: int) -> dict[str, str]:
+    """Each move the task can take, with an example in its own terms, less `free`: an escalation
+    needs a judge to escalate to, a gate a field to read, and a layer of statements for every
+    label room in the node budget."""
+    first, second = task.labels[:2]
+    options = " ".join(f"[{label}: {quoted(applies(label))}]" for label in (first, second))
+    question = f"{quoted(task.description)} {options}"
+    examples = {
+        "statements": statements(task.labels[:2]),
+        "rubric": (
+            f"ask degree = {quoted(f'How strongly does the input call for {first}?')} "
+            f"[weakly] [somewhat] [clearly]\nwhen degree >= 1.5: {first}\nalways: {second}"
+        ),
+        "decompose": statements(task.labels),
+        "second_opinion": (
+            f"ask first = {question}\n"
+            f"ask second = {quoted(f'A second reading. {task.description}')} {options}\n"
+            "vote checked = agree of [first, second]\n"
+            f'when checked == "yes" and first == "{first}": {first}\nalways: {second}'
+        ),
+    }
+    if (reading := gated_reading(task)) is not None:
+        declared, test = reading
+        examples["gate"] = (
+            f"{declared}\nask kind = {question} when {test}\n"
+            f'when kind == "{first}": {first}\nalways: {second}'
+        )
+    if judges:
+        examples["escalate"] = (
+            f"ask first = {question}\n"
+            f'when first.confidence >= 0.8 and first == "{first}": {first}\n'
+            f'when first.confidence >= 0.8 and first == "{second}": {second}\n'
+            f"always: ask {question} using {judges[0]}"
+        )
+    if len(compile_rules(examples["decompose"]).nodes) > max_nodes:
+        del examples["decompose"]
+    return examples
+
+
+def revising(task: SearchTask, config: SearchConfig, judges: Sequence[str]) -> str:
+    """The moves a proposal may take, each with its example, and the one to name when none fits."""
+    offered = "".join(
+        f"{name}: {MOVES[name]}, for example:\n{example}\n"
+        for name, example in move_examples(task, judges, config.max_nodes).items()
+    )
+    return (
+        "Take one of these moves and name it in the move field; each example is a whole "
+        f"program, of which you return the part asked for:\n{offered}{FREE}: {MOVES[FREE]}.\n"
+    )
+
+
+def sizing(config: SearchConfig) -> str:
+    """How big a graph the proposer should aim for."""
+    if config.prefer == "small":
+        return "Prefer small generalizable graphs."
+    return (
+        "Prefer graphs that ask many judgments: a layer of statements or rubrics, one or more "
+        "per label, summed with 'let' and cut with 'when', generalizes better than one "
+        "question asked to do everything, so add judgments rather than fold them into one."
+    )
+
+
 def proposer_prompt(
     task: SearchTask, config: SearchConfig, judges: Sequence[str] = (), extracting: bool = False
 ) -> str:
@@ -527,9 +667,7 @@ def proposer_prompt(
                     "question": {
                         "type": "choice",
                         "instructions": task.description,
-                        "criteria": {
-                            label: f"When the input calls for {label}." for label in task.labels[:2]
-                        },
+                        "criteria": {label: applies(label) for label in task.labels[:2]},
                     },
                     "inputs": {"request": {"type": "state"}},
                 }
@@ -591,7 +729,7 @@ def proposer_prompt(
         "skip the coalesce. A required missing output invalidates that execution. "
         "Switch cases must cover the source's categorical values; threshold uses >= for above. "
         "The label output must have a statically known domain within the allowed labels. "
-        "Do not encode example-specific answers. Prefer small generalizable graphs.\n"
+        f"Do not encode example-specific answers. {sizing(config)}\n"
         f"Task: {task.description}\nAllowed label values: {json.dumps(task.labels)}\n"
         f"{field_summary(task, config.evidence) or text_only(task)}"
         f"{listing(task)}"
@@ -659,7 +797,8 @@ def proposer_prompt(
         "Rules decide the label. A line 'output priority:' starts another rule list, which "
         "decides an output of that name; keep any such sections a program already has. "
         "Write no other syntax: no "
-        "code fences, no section headings, no comments. "
+        "code fences, no section headings, no comments.\n"
+        f"{revising(task, config, judges)}"
         "The readings part holds declarations and the rules part holds "
         "rules; return the part you are asked for, complete and alone, except that a rules "
         "part may declare any reading its rules need. Answer in the same form the part arrives "
@@ -675,17 +814,18 @@ def optimize_plan(
     initial: Plan,
     client: TypeSafeClient,
     model: str,
-    reflection_lm: Callable,
+    reflection_lm: Callable[[str], str | Proposal],
     config: SearchConfig,
     execution: ExecutionConfig | None = None,
     score: Scorer | None = None,
     run_dir: Path | None = None,
     models: Models | None = None,
 ) -> tuple[Plan, dict]:
-    """Search from `initial`. With `run_dir`, GEPA checkpoints its state there after every
-    round and resumes from it when it exists, so an interrupted search continues where it
-    stopped and a finished one runs on under a larger budget; a `gepa.stop` file in it stops
-    the search after the current round with everything kept."""
+    """Search from `initial`. `reflection_lm` answers a prompt with the part it proposes, or
+    with a `Proposal` naming the move it took. With `run_dir`, GEPA checkpoints its state there
+    after every round and resumes from it when it exists, so an interrupted search continues
+    where it stopped and a finished one runs on under a larger budget; a `gepa.stop` file in it
+    stops the search after the current round with everything kept."""
     initial.check(task.labels, config.max_nodes, config.max_depth)
     seed_sha256 = hashlib.sha256(initial.model_dump_json().encode()).hexdigest()
     task_sha256 = hashlib.sha256(task.model_dump_json().encode()).hexdigest()
@@ -734,6 +874,9 @@ def optimize_plan(
         mined_report = {"rules": rules, "validation": scored["mined"], "used": used}
     reflection_calls = 0
     repairs = 0
+    # Each proposal's part and move, with its text and the candidate it revised, to say later
+    # which were kept.
+    proposals: list[tuple[dict, str, dict[str, str]]] = []
 
     def reflect(prompt, candidate, component):
         nonlocal reflection_calls
@@ -760,11 +903,13 @@ def optimize_plan(
         for attempt in range(config.repair_attempts + 1):
             try:
                 reflection_calls += 1
-                proposal = reflection_lm(request).strip()
+                answered = reflection_lm(request)
             except Exception as error:
                 # Preserve the provider failure if GEPA treats it as an unsuccessful mutation.
                 adapter.failure = error
                 raise
+            answered = answered if isinstance(answered, Proposal) else Proposal(answered)
+            proposal = answered.graph.strip()
             try:
                 adapter.parse(candidate | {component: proposal})
                 break
@@ -780,6 +925,7 @@ def optimize_plan(
                 # Only the latest attempt matters; earlier failures would bloat the prompt.
                 request = f"{prompt}\n\n{repair}"
         adapter.proposed = proposal
+        proposals.append(({"part": component, "move": answered.move}, proposal, dict(candidate)))
         return proposal
 
     given = models or Models()
@@ -815,6 +961,16 @@ def optimize_plan(
     )
     if adapter.failure is not None:
         raise adapter.failure
+    # A proposal is kept when the program it makes of its parent became a candidate; one that
+    # restates its parent never does.
+    moves = [
+        record
+        | {
+            "kept": text != parent[record["part"]]
+            and parent | {record["part"]: text} in result.candidates
+        }
+        for record, text, parent in proposals
+    ]
 
     def gain_p(index: int) -> float:
         seed_scores, scores = result.val_subscores[0], result.val_subscores[index]
@@ -882,6 +1038,7 @@ def optimize_plan(
         "candidates": len(result.candidates),
         "reflection_calls": reflection_calls,
         "repairs": repairs,
+        "moves": moves,
         "invalid_candidate_evaluations": adapter.invalid_candidate_evaluations,
         "metric_calls": result.total_metric_calls,
     }

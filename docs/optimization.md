@@ -25,7 +25,15 @@ evaluate and keep.
    been best, so it is off unless asked for. Search revises one part at a time:
    **readings** holds reads and judgments; **rules** holds names, votes and the
    rules that decide. The proposer returns the replacement part, preserving
-   references to nodes owned by the unchanged one.
+   references to nodes owned by the unchanged one, and names the move it took
+   from a short list, each shown with an example in the task's own labels:
+   `statements` (yes/no statements summed and cut), `rubric` (a score with a
+   cut), `decompose` (a layer of statements for every label, offered when the
+   node cap has room for it), `second_opinion` (a vote), `gate` (a judgment
+   asked only where a reading says so, offered when the inputs have a number
+   to read), `escalate` (a named judge for the own judge's unsure answers,
+   offered when `--judge` names one) and `free` (anything else). Before the
+   moves, every searched graph was read nodes, a choice and a coalesce.
 3. **Check.** The replacement is assembled with the unchanged part and
    validated as a complete graph; no generated code runs. Validation errors
    go back to the proposer for up to `--repair-attempts` repairs. Candidates
@@ -68,6 +76,7 @@ uv run rulesmith evaluate task.json runs/my-task/plan.json --split test \
 | `--keep-judge` | off | Keep only a graph whose rules, wherever they answer without asking the judge, are right at least this often on the labeled training and validation examples (Laplace-smoothed, so a rule needs about 100 right answers in a row to reach 0.99). Search falls back to the next best candidate, then to the starting graph, and fails if none qualifies. Use it where a rule over a field anyone can set would be a way around the judge, such as fraud |
 | `--merges` | 5 | Times search may combine two candidates, taking each part from whichever graph scored better |
 | `--max-nodes` / `--max-depth` | 16 / 8 | Limits on generated graphs |
+| `--prefer` | small | `small` tells the proposer to keep graphs small; `large` tells it to build layers of judgments, one or more per label, and raises the default `--max-nodes` to 64 |
 | `--seed` | 0 | Search seed |
 | `--grader-model` / `--grader-base-url` | — | DSPy model that grades answers instead of the labels; examples may then omit `label`. Must differ from the judge the graph asks. Also on `evaluate`. |
 
@@ -99,6 +108,7 @@ benchmark drivers stop this way at their deadline and resume on the next run.
 | `candidates` | Graphs that reached validation, including the seed. `1` means nothing new did. |
 | `reflection_calls` | Proposer calls |
 | `repairs` | Proposals that failed validation and were sent back to the proposer with the error, up to `--repair-attempts` each |
+| `moves` | Each proposal's part, the move the proposer named for it (null where it named none), and whether the program it made became a candidate |
 | `invalid_candidate_evaluations` | Evaluations rejected by schema or graph checks |
 | `metric_calls` | Example evaluations used |
 | `mined` | With `--mine`: how many rules were mined, their validation score, and whether search started from them |

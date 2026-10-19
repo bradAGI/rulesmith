@@ -10,6 +10,7 @@ from conftest import chat_reply
 from test_graph import binary_plan, task_data
 
 from rulesmith.graph import Plan, Task
+from rulesmith.optimize import SearchConfig
 
 
 def invoke(*args):
@@ -747,3 +748,36 @@ def test_a_first_run_without_a_key_or_an_input_says_what_is_missing(tmp_path):
     )
     assert missing.returncode == 2
     assert "nowhere.json" in missing.stderr and "Traceback" not in missing.stderr
+
+
+def test_cli_optimization_can_prefer_large_graphs(tmp_path, provider, monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-placeholder")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-placeholder")
+    task = write(tmp_path / "task.json", task_data())
+    provider.completion = chat_reply(graph=binary_plan())
+    provider.body["answers"] = {"eligible": {"type": "noul", "noul": 0.9}}
+    output = tmp_path / "run"
+    result = invoke(
+        "optimize",
+        task,
+        "--output",
+        output,
+        "--base-url",
+        provider.url,
+        "--model",
+        "fixture-model",
+        "--reflection-model",
+        "openai/fixture-model",
+        "--reflection-base-url",
+        provider.url + "/v1",
+        "--max-metric-calls",
+        4,
+        "--reflection-batch",
+        1,
+        "--prefer",
+        "large",
+    )
+    assert result.returncode == 0, result.stderr
+    report = json.loads((output / "report.json").read_text())
+    assert report["search"]["prefer"] == "large"
+    assert report["search"]["max_nodes"] == SearchConfig(prefer="large").max_nodes
