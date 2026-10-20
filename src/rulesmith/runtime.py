@@ -419,7 +419,7 @@ def decider(plan: Plan, name: str, values: dict) -> str:
     """The node whose value an output took, followed through each list of fallbacks to the rule
     that answered."""
     node = plan.nodes[name]
-    while isinstance(node, Coalesce):
+    while isinstance(node, Coalesce) and plan.decides_by(name) is None:
         name = next(source for source in node.sources if source in values)
         node = plan.nodes[name]
     return name

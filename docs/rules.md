@@ -237,6 +237,11 @@ when checked == "yes" and first == "yes": review
 always: accept
 ```
 
+A rule may also decide by a judgment or vote it names: `when checked == "yes":
+first` hands on whatever `first` answered, so a second opinion over a task's
+labels is the same four lines however many labels there are, with a rule after
+it for the cases the readings split on. A name that is also a label is refused.
+
 Each judgment in a vote is a separate model call, so a second opinion costs a
 second question. Everything measured in this repo says calls are the expensive
 part and rarely the deciding one, so reach for this where being wrong is costly,
@@ -706,6 +711,7 @@ always: MOVE_FORWARD
   `let margin = 2 * gain - worst + 1` adds, subtracts and scales readings.
 - **Votes** settle several choice judgments into one value:
   `vote verdict = agree of [first, second]` or `vote verdict = majority of [a, b, c]`.
+  A rule's action may be the name of a judgment or vote, which then answers for it.
 - **Outputs** beyond the label each get a rule list of their own, after the
   label's, under an `output <name>:` heading. Search scores the label only.
 - **Measurements** are what `rulesmith calibrate` writes and search never invents.

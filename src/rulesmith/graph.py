@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections import Counter
 from graphlib import CycleError, TopologicalSorter
 from typing import Annotated, Literal, Self
@@ -293,6 +294,10 @@ class Threshold(Decides):
 class Merge(Guarded):
     type: Literal["merge"] = "merge"
     inputs: dict[Text, Source] = Field(min_length=1)
+
+
+# What the rules compiler names each rule, so a rule is never read as a judgment of its own.
+RULE = re.compile(r"rule_\d+")
 
 
 class Coalesce(Guarded):
@@ -789,6 +794,17 @@ class Plan(StrictModel):
     def constant(cls, label: str) -> Plan:
         """A call-free graph that always outputs one label."""
         return cls(nodes={}, outputs={"label": LiteralInput(value=label)})
+
+    def decides_by(self, name: str) -> str | None:
+        """The judgment or vote a rule hands on: the rule is a coalesce of that one node, which
+        has a name of its own. A list of fallbacks, however short, is not one."""
+        node = self.nodes[name]
+        if not isinstance(node, Coalesce) or len(node.sources) != 1:
+            return None
+        source = node.sources[0]
+        if RULE.fullmatch(source) or not isinstance(self.nodes[source], (Call, Vote)):
+            return None
+        return source
 
     def check(self, labels: list[str], max_nodes: int, max_depth: int) -> None:
         """Keep classification targets and search bounds outside mutable candidates."""

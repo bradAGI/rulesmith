@@ -274,7 +274,7 @@ def render_domain(read) -> str:
 def spine(plan: Plan, top: str) -> set[str]:
     """The rules the graph tries and the chain of fallbacks that joins them."""
     node = plan.nodes[top]
-    if isinstance(node, Coalesce):
+    if isinstance(node, Coalesce) and plan.decides_by(top) is None:
         return {top}.union(*(spine(plan, source) for source in node.sources))
     return {top}
 
@@ -362,9 +362,9 @@ def ordered(plan: Plan, top: str, guard: Condition | None = None) -> list[tuple[
         parts = outer.conditions if isinstance(outer, All) else [outer] if outer else []
         tests += [test for test in parts if test not in tests]
     combined = tests[0] if len(tests) == 1 else (All(conditions=tests) if tests else None)
-    if isinstance(node, Coalesce):
+    if isinstance(node, Coalesce) and plan.decides_by(top) is None:
         return [rule for source in node.sources for rule in ordered(plan, source, combined)]
-    if isinstance(node, (Value, Call, Threshold)):
+    if isinstance(node, (Value, Call, Threshold, Coalesce)):
         return [(top, combined)]
     raise RuleError(f"{node.type} node {top!r} has no rule form")
 
@@ -372,6 +372,8 @@ def ordered(plan: Plan, top: str, guard: Condition | None = None) -> list[tuple[
 def render_action(node, reads: dict[str, Read], plan: Plan, labels: dict[str, str] | None) -> str:
     if isinstance(node, (Value, Threshold)):
         return render_decision(node, reads, plan) + render_measured(node)
+    if isinstance(node, Coalesce):
+        return name_of(node.sources[0], reads, plan)
     question = node.question
     asked = f"ask {quoted(question.instructions)}"
     if question.type == "score":
@@ -1014,4 +1016,10 @@ def parse_action(text: str, names: dict, nodes: dict, labels: dict[str, str] | N
             "above": above.strip(),
             "below": below.strip(),
         } | measured
+    if (name := text.strip()) in names:
+        if labels and name in labels:
+            raise RuleError(f"{name!r} names both a judgment and a label; rename one")
+        # A rule that decides by a judgment or vote hands on its value, guarded by its own
+        # condition: a coalesce of that one source.
+        return {"type": "coalesce", "sources": [named(name, names, nodes)]} | measured
     return {"type": "value", "value": text} | measured

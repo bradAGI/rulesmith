@@ -379,3 +379,25 @@ def test_a_rule_after_one_that_always_answers_is_refused():
     compile_rules("read x in [0, 10]\nwhen x >= 5: b\nalways: a\noutput team:\nalways: billing\n")
     compile_rules("read x in [0, 10]\nalways: x >= 5 ? b : a\nalways: c\n")
     compile_rules('read x in [0, 10]\nalways: ask "Q?" [a] [b] given [x]\nalways: c\n')
+
+
+SECOND_OPINION = """ask first = "Is this order fraudulent?" [yes: "It is."] [no: "It is not."]
+ask second = "Read again: is it fraudulent?" [yes: "It is."] [no: "It is not."]
+vote checked = agree of [first, second]
+when checked == "yes": first
+always: ask "The readings split. Is it fraudulent?" [yes: "It is."] [no: "It is not."]"""
+
+
+def test_a_rule_may_decide_by_a_named_judgment():
+    # A second opinion then needs one rule, whatever the label count, not one per label.
+    plan = compile_rules(SECOND_OPINION)
+    rule = plan.nodes["rule_1"]
+    assert rule.type == "coalesce" and rule.sources == ["first"] and rule.when is not None
+    assert render_rules(plan) == SECOND_OPINION
+    plan.check(["yes", "no"], 16, 8)
+
+
+def test_a_name_that_is_also_a_label_cannot_decide():
+    rules = 'ask yes = "Is it so?" [task labels]\nalways: yes\n'
+    with pytest.raises(RuleError, match="yes"):
+        compile_rules(rules, {"yes": "It is.", "no": "It is not."})

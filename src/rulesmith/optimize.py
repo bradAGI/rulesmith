@@ -611,7 +611,8 @@ def move_examples(task: SearchTask, judges: Sequence[str], max_nodes: int) -> di
             f"ask first = {question}\n"
             f"ask second = {quoted(f'A second reading. {task.description}')} {options}\n"
             "vote checked = agree of [first, second]\n"
-            f'when checked == "yes" and first == "{first}": {first}\nalways: {second}'
+            'when checked == "yes": first\n'
+            f"always: ask {quoted(f'The readings disagreed. {task.description}')} {options}"
         ),
     }
     if (reading := gated_reading(task)) is not None:

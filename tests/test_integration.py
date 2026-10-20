@@ -1117,3 +1117,30 @@ def test_a_search_seeded_with_statements_keeps_them_and_records_its_moves(provid
     assert {("rules", "free", True), ("rules", "statements", True)} <= tried
     # A readings answer that restates the seed changes nothing, so it is never kept.
     assert all(not move["kept"] for move in report["moves"] if move["part"] == "readings")
+
+
+def test_a_rule_that_decides_by_a_judgment_hands_on_its_answer(client, provider):
+    plan = compile_rules(
+        'ask first = "Is this order fraudulent?" [yes: "It is."] [no: "It is not."]\n'
+        'ask second = "Read again: is it fraudulent?" [yes: "It is."] [no: "It is not."]\n'
+        "vote checked = agree of [first, second]\n"
+        'when checked == "yes": first\n'
+        'always: ask "The readings split. Is it fraudulent?" [yes: "It is."] [no: "It is not."]'
+    )
+    program = DecisionProgram(plan, client, "fixture-model")
+
+    def choice(answer: str) -> dict:
+        other = "no" if answer == "yes" else "yes"
+        return {
+            "type": "choice",
+            "choice": answer,
+            "probabilities": {answer: 0.9, other: 0.1},
+            "confidence": 0.9,
+        }
+
+    provider.answers = {"first": choice("no"), "second": choice("no"), "rule_2": choice("yes")}
+    agreed = program(state="Example")
+    assert (agreed.label, agreed.decided_by) == ("no", "rule_1")
+    provider.answers["second"] = choice("yes")
+    split = program(state="Example")
+    assert (split.label, split.decided_by) == ("yes", "rule_2")
