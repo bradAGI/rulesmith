@@ -213,3 +213,24 @@ def test_a_gated_ordered_decision_shows_its_gate():
     by_id = {box.id: box for box in drawn.boxes}
     assert by_id[gate.target].name == "pick" and by_id[gate.source].lines == ("x is present",)
     assert conditions(mermaid(plan)) == [(gate.source, gate.target)]
+
+
+def test_a_rule_that_decides_by_a_judgment_is_drawn_as_a_rule_fed_by_it():
+    # Compiled, such a rule is a coalesce of one named source; drawn as one, it looked like a
+    # fallback chain, with the judgment ranked first in a line of one.
+    plan = compile_rules(
+        'ask first = "Scam?" [scam: "Yes."] [real: "No."]\n'
+        'ask second = "Trust it?" [real: "Yes."] [scam: "No."]\n'
+        "vote checked = agree of [first, second]\n"
+        'when checked == "yes": first\n'
+        "always: real"
+    )
+    drawing = draw(plan)
+    ids = {box.name: box.id for box in drawing.boxes if box.name is not None}
+    (rule,) = [box for box in drawing.boxes if box.name == "rule_1"]
+    assert rule.kind == "rule"
+    into = [(edge.source, edge.kind) for edge in drawing.edges if edge.target == rule.id]
+    assert (ids["first"], "data") in into
+    assert all(kind != "rank" for _, kind in into)
+    assert "first that answers" not in " ".join(rule.lines)
+    mermaid(plan)

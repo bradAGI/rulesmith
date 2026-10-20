@@ -136,7 +136,10 @@ def label(name: str, node, reads: dict[str, Read], plan: Plan) -> tuple[str, ...
     if isinstance(node, Vote):
         return (f"{name}: {node.rule} of {len(node.sources)}",)
     if isinstance(node, Coalesce):
-        return (name, "first that answers")
+        # A rule that hands on a judgment's answer compiles to a coalesce of that one source;
+        # drawn as a chain, the judgment looked ranked first in a line of one.
+        decided = plan.decides_by(name)
+        return (f"as {decided} answers",) if decided else (name, "first that answers")
     if isinstance(node, Confidence):
         return (f"how sure {node.source} was",)
     if isinstance(node, Sum):
@@ -148,11 +151,13 @@ def label(name: str, node, reads: dict[str, Read], plan: Plan) -> tuple[str, ...
     return (name,)
 
 
-def kind_of(node) -> str:
+def kind_of(name: str, node, plan: Plan) -> str:
     for kind, types in KINDS.items():
         if isinstance(node, types):
             return kind
-    return "join" if isinstance(node, Coalesce) else "step"
+    if isinstance(node, Coalesce):
+        return "rule" if plan.decides_by(name) else "join"
+    return "step"
 
 
 def safe(text: str) -> str:
@@ -211,10 +216,11 @@ def build(
                 drawing.edges.append(Edge(ids[node.input.node], ids[name], "data"))
             continue
         lines = label(name, node, reads, plan)
-        drawing.boxes.append(Box(ids[name], kind_of(node), lines, name, node.type, unit))
+        kind = kind_of(name, node, plan)
+        drawing.boxes.append(Box(ids[name], kind, lines, name, node.type, unit))
     conditions = 0
     for name, node in plan.nodes.items():
-        if isinstance(node, Coalesce):
+        if isinstance(node, Coalesce) and plan.decides_by(name) is None:
             # Tried in order, so the order is the point: a judge last in line is asked only when
             # every rule ahead of it declined.
             for rank, source in enumerate(node.sources, start=1):
