@@ -148,7 +148,8 @@ def test_a_unit_that_is_one_answer_says_so_on_its_box():
     # `always: hold` compiles to no nodes and a literal output, so there is nothing to draw
     # inside the unit; its box says the answer, since the unit is that answer.
     unit = Graph(plan=compile_rules("always: hold\n", None))
-    plan = Plan(nodes={"large": unit, "decision": Coalesce(sources=["large"])}, outputs={"label": NodeInput(node="decision")})
+    nodes = {"large": unit, "decision": Coalesce(sources=["large"])}
+    plan = Plan(nodes=nodes, outputs={"label": NodeInput(node="decision")})
     drawn = draw(plan)
     box = next(b for b in drawn.boxes if b.kind == "unit")
     assert box.lines == ("large", "always hold")

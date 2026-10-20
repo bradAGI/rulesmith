@@ -201,7 +201,8 @@ def build(
             # A unit of one line, `always: hold`, has no nodes and is its answer; its box says so,
             # since there is nothing to draw inside it.
             answer = node.plan.outputs.get(node.output)
-            said = f"always {answer.value}" if isinstance(answer, LiteralInput) else f"answers with its {node.output}"
+            literal = isinstance(answer, LiteralInput)
+            said = f"always {answer.value}" if literal else f"answers with its {node.output}"
             lines = (name, said)
             drawing.boxes.append(Box(ids[name], "unit", lines, name, node.type, unit, when))
             if not drawing.closed:
