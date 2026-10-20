@@ -42,6 +42,10 @@ evaluate and keep.
    on validation.
 5. **Select.** The graph with the best validation score is saved. The seed
    stays eligible, so a graph that overfits training will not replace it.
+   Validation itself can be fitted when a search starts from an earlier winner:
+   on TREC one went from 0.74 to 0.84 on validation and 0.83 on test, against
+   its seed's 0.94. Before trusting a gain measured against another judge, score
+   the seed's rules on that judge too.
 
 The test split never reaches the optimizer. Score it once, after selection:
 
@@ -76,7 +80,7 @@ uv run rulesmith evaluate task.json runs/my-task/plan.json --split test \
 | `--keep-judge` | off | Keep only a graph whose rules, wherever they answer without asking the judge, are right at least this often on the labeled training and validation examples (Laplace-smoothed, so a rule needs about 100 right answers in a row to reach 0.99). Search falls back to the next best candidate, then to the starting graph, and fails if none qualifies. Use it where a rule over a field anyone can set would be a way around the judge, such as fraud |
 | `--merges` | 5 | Times search may combine two candidates, taking each part from whichever graph scored better |
 | `--max-nodes` / `--max-depth` | 16 / 8 | Limits on generated graphs |
-| `--prefer` | small | `small` tells the proposer to keep graphs small; `large` tells it to build layers of judgments, one or more per label, and raises the default `--max-nodes` to 64 |
+| `--prefer` | small | `small` tells the proposer to keep graphs small; `large` tells it to build layers of judgments, one or more per label, and raises the default `--max-nodes` to 64. With a 4B judge, `large` lost nine points on jobs and held level on TREC against `small`: every layer of statements scored below one well-written question. Use it with a judge that scores statements well, and score the result on test either way |
 | `--seed` | 0 | Search seed |
 | `--grader-model` / `--grader-base-url` | — | DSPy model that grades answers instead of the labels; examples may then omit `label`. Must differ from the judge the graph asks. Also on `evaluate`. |
 
